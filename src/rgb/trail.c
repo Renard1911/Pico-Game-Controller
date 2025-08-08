@@ -102,8 +102,8 @@ void ws2812b_trail(uint32_t counter, bool hid_mode)
 
         // Change palette based on counter to demonstrate different palettes
         // This cycles through palettes every ~10 seconds at 200Hz
-        int demo_palette = (counter / 2000) % 9; // 9 palettes available (0-8)
-        set_color_palette(demo_palette);
+        // int demo_palette = (counter / 2000) % 9; // 9 palettes available (0-8)
+        set_color_palette(PALETTE_NEON);
 
         // Create a color that shifts through the spectrum based on position
         // Each of the 5 trail points will have different colors
