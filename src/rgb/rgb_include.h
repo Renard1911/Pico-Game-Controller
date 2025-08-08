@@ -16,7 +16,9 @@ typedef struct {
 
 extern uint32_t enc_val[ENC_GPIO_SIZE];
 extern RGB_t leds[WS2812B_LED_SIZE];  // Reference to FastLED-style LED array
+extern const bool ENC_REV[ENC_GPIO_SIZE];  // External reference to encoder reverse array
 
 #include "ws2812b_util.c"
 #include "color_cycle.c"
 #include "turbocharger.c"
+#include "trail.c"

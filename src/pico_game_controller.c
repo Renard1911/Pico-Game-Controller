@@ -299,7 +299,7 @@ void init() {
   if (!gpio_get(SW_GPIO[1])) {
     ws2812b_mode = &turbocharger_color_cycle;
   } else {
-    ws2812b_mode = &ws2812b_color_cycle;
+    ws2812b_mode = &ws2812b_trail;
   }
 
   // Debouncing Mode
