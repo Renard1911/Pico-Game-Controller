@@ -339,8 +339,8 @@ void init()
   }
   else
   {
-    // ws2812b_mode = &ws2812b_color_cycle;
-    ws2812b_mode = &ws2812b_trail;
+    // Default to demo that cycles through all effects
+    ws2812b_mode = &ws_demo_all;
   }
 
   // Debouncing Mode

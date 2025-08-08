@@ -26,6 +26,7 @@ extern RGB_t hid_rgb[WS2812B_LED_ZONES];  // Two HID-provided RGB colors
 #include "turbocharger.c"
 #include "trail.c"
 // New effects
+#include "demo_all.c"
 #include "dual_orbit.c"
 #include "velocity_comet.c"
 #include "button_ripples.c"
