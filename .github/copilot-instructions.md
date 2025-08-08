@@ -1,145 +1,52 @@
-# Pico Game Controller - AI Coding Instructions
+# Pico Game Controller — AI Coding Instructions
 
-## Architecture Overview
+Purpose: Make quick, correct edits to this Pico (RP2040) firmware by following project-specific patterns and workflows.
 
-This is a Raspberry Pi Pico-based IIDX/SDVX game controller firmware using TinyUSB, dual-core processing, and PIO state machines for hardware-accelerated I/O. The controller supports 10 buttons, 10 LEDs, 1 encoder, and WS2812B RGB strips with runtime mode switching.
+Architecture (what runs where)
 
-### Dual-Core Architecture & Communication
+- Core 0: USB HID device loop + input scan + mode/LED logic. See `src/pico_game_controller.c` (main, `joy_mode()`, `key_mode()`, `update_lights()`).
+- Core 1: WS2812B rendering loop (`core1_entry()` runs every ~5ms). Only launched if RGB isn’t disabled at boot.
+- PIO/DMA: `encoders.pio` feeds `enc_val[]` via DMA; `ws2812.pio` drives LEDs at 800kHz. Headers are auto-generated into `build/src/…` and referenced as `encoders.pio.h`, `ws2812.pio.h`.
 
-- **Core 0**: Main USB HID loop, input scanning, mode switching, LED control (`pico_game_controller.c`)
-- **Core 1**: Dedicated WS2812B RGB lighting with 5ms update cycle (`core1_entry()`)
-- **Inter-core Communication**: Shared globals (`lights_report`, `enc_val`, timing variables) - no locks needed due to single-writer patterns
+Boot-time behavior (read GPIO via internal pull‑ups)
 
-### Operating Mode System
+- Hold `SW_GPIO[0]` to start in NKRO keyboard/mouse mode; otherwise default to joystick gamepad.
+- Hold `SW_GPIO[1]` to select Turbocharger LEDs; otherwise Trail effect.
+- Hold `SW_GPIO[8]` to disable RGB (prevents launching core 1).
+  Pins live in `src/controller_config.h` (e.g., `SW_GPIO[] = {2,4,6,8,10,12,14,16,19,21}`); update there only, and keep sizes consistent with `*_SIZE` defines.
 
-Boot-time button combinations determine controller behavior:
+HID and data flow
 
-- **Default**: USB gamepad with HID joystick reports (`joy_mode()`)
-- **GPIO 2 held**: NKRO keyboard + mouse mode with alternating reports (`key_mode()`)
-- **GPIO 4 held**: Turbocharger RGB mode instead of color cycle
-- **GPIO 19 held**: Disables RGB entirely (core 1 not launched)
+- Report IDs in `src/usb_descriptors.h`: 1=Joystick, 2=Lights, 3=NKRO, 4=Mouse. Descriptors size depends on `SW_GPIO_SIZE`, `LED_GPIO_SIZE`, `WS2812B_LED_ZONES`.
+- Lights: OUT reports populate `lights_report.raw[...]`; if no HID lights for `REACTIVE_TIMEOUT_MAX` (1s), fall back to button‑reactive LEDs in `update_lights()`.
+- Encoder to joystick: modulo wrap with `ENC_PULSE` (PPR×4), scaled to 0–255.
 
-Mode switching logic in `init()` checks GPIO states before entering main loop.
+Project conventions (important when adding features)
 
-## Hardware Configuration System
+- Debounce modes live in `src/debounce/`. Add a `uint16_t my_algo()` and include it in `debounce_include.h`; select via `debounce_mode = &my_algo;` in `init()`.
+- RGB effects live in `src/rgb/`. Add `void my_effect(uint32_t counter, bool hid_mode)`; include in `rgb_include.h`; select via `ws2812b_mode = &my_effect;`. Write colors into the global `leds[]`; frame is emitted by `show()`.
+- Switches use pull‑ups; pressed means `!gpio_get(SW_GPIO[i])`.
 
-### Centralized Pin Management (`controller_config.h`)
+Build, flash, debug (Windows/VS Code Pico extension)
 
-All GPIO pins, array sizes, and timing constants defined here:
+- Tasks: “Compile Project” (ninja build to `build/`), “Run Project” (picotool load), “Flash” (OpenOCD probe), plus rescue/reset tasks.
+- Artifacts: UF2 at `build/src/Pico_Game_Controller.uf2` and auto‑copied to `build_uf2/Pico_Game_Controller.uf2`.
+- PowerShell helper: `.lash.ps1 [-SkipBuild] [-Timeout <sec>]` builds (ninja), reboots to BOOTSEL (picotool), detects the `RPI-RP2` drive, and copies the UF2.
 
-```c
-#define SW_GPIO_SIZE 10              // Drives all array declarations
-const uint8_t SW_GPIO[] = {2, 4, 6, 8, 10, 12, 14, 16, 19, 21};  // Staggered for PCB routing
-const uint8_t LED_GPIO[] = {3, 5, 7, 9, 11, 13, 15, 17, 20, 18};
-```
+Files to know
 
-**Critical**: Arrays must match `SW_GPIO_SIZE`/`LED_GPIO_SIZE`. Staggered pin layout (2,3,4,5...) simplifies PCB design.
+- `src/pico_game_controller.c`: main loop, boot‑time mode selection, encoders DMA IRQ, lights fallback, core‑1 launcher.
+- `src/controller_config.h`: single source of truth for sizes, pins, and constants (SW/LED/ENC/RGB).
+- `src/usb_descriptors.h`: HID report layouts parameterized by config sizes.
+- `src/rgb/*`: `ws2812b_util.c` (palette/color helpers), `color_cycle.c`, `turbocharger.c`, `trail.c` effects.
+- `src/debounce/*`: `eager.c` (press‑immediate, hold for N µs), `deferred.c` (stable‑for‑N µs).
 
-### Pull-up Switch Logic
+Gotchas and edge cases
 
-Switches use internal pull-ups; GPIO reads are inverted:
+- Keep arrays aligned to `*_SIZE` defines; descriptors and loops assume exact lengths.
+- Single‑writer globals cross cores; follow existing patterns to avoid races (e.g., only core 1 renders, core 0 updates mode/state).
+- If encoder direction is wrong, flip `ENC_REV[]` in `controller_config.h`.
 
-```c
-!gpio_get(SW_GPIO[i])  // true when pressed, false when released
-```
+Ask before changing
 
-## Modular Extension Patterns
-
-### Adding Debounce Algorithms (`src/debounce/`)
-
-1. Create `.c` file with function signature: `uint16_t function_name()`
-2. Return button states as 16-bit mask (bit 0 = button 0, etc.)
-3. Add `#include "filename.c"` to `debounce_include.h`
-4. Set function pointer: `debounce_mode = &function_name;` in `init()`
-
-See `eager.c` vs `deferred.c` for timestamp-based vs immediate debouncing patterns.
-
-### Adding RGB Effects (`src/rgb/`)
-
-1. Create function: `void effect_name(uint32_t counter, bool hid_mode)`
-2. Manipulate global `leds[WS2812B_LED_SIZE]` array directly
-3. Use `put_pixel(urgb_u32(r, g, b))` or update `leds[]` then call `show()`
-4. Add `#include "filename.c"` to `rgb_include.h`
-5. Set function pointer: `ws2812b_mode = &effect_name;` in `init()`
-
-Counter increments every 5ms; `hid_mode` indicates HID vs reactive lighting state.
-
-## Build System & Workflow
-
-### CMake + Pico SDK Integration
-
-- **Root CMakeLists.txt**: VS Code Pico extension compatibility, SDK path setup
-- **src/CMakeLists.txt**: PIO header generation, TinyUSB linking, automatic UF2 copy to `build_uf2/`
-
-### Essential VS Code Tasks
-
-Use built-in tasks instead of terminal commands:
-
-- **"Compile Project"**: Builds via ninja in `build/` directory
-- **"Run Project"**: Uses picotool to flash over USB (Pico in BOOTSEL mode)
-- **"Flash"**: OpenOCD-based debugging/flashing (requires debug probe)
-
-### PIO State Machine Programs
-
-- **`encoders.pio`**: Quadrature encoder with debouncing, generates counts via DMA
-- **`ws2812.pio`**: 800kHz WS2812B bit-banging with precise timing
-- Headers auto-generated by CMake: `encoders.pio.h`, `ws2812.pio.h`
-
-## Critical Implementation Patterns
-
-### USB HID Report Structure
-
-Three report types with specific IDs (`usb_descriptors.h`):
-
-```c
-REPORT_ID_JOYSTICK = 1;   // 16-bit button mask + 2×8-bit joystick values
-REPORT_ID_LIGHTS = 2;     // 10 button LEDs + 6 RGB zone bytes
-REPORT_ID_KEYBOARD = 3;   // 32-byte NKRO report
-REPORT_ID_MOUSE = 4;      // Standard mouse with wheel support
-```
-
-### Memory-Efficient HID Data
-
-Union overlays structured access with raw bytes:
-
-```c
-union {
-  struct { uint8_t buttons[10]; RGB_t rgb[2]; } lights;
-  uint8_t raw[16];
-} lights_report;
-```
-
-Direct USB buffer access without memcpy overhead.
-
-### Encoder Rollover Handling
-
-Prevents uint32 overflow in gamepad mode where joystick range is 0-255:
-
-```c
-cur_enc_val[i] %= ENC_PULSE;  // ENC_PULSE = ENC_PPR * 4
-report.joy0 = ((double)cur_enc_val[0] / ENC_PULSE) * (UINT8_MAX + 1);
-```
-
-### Reactive Lighting Timeout
-
-1-second fallback from HID to button-reactive LEDs:
-
-```c
-bool hid_mode = time_us_64() - reactive_timeout_timestamp >= REACTIVE_TIMEOUT_MAX;
-```
-
-Updated whenever HID light data received; enables standalone operation.
-
-## Hardware-Specific Considerations
-
-- **TinyUSB**: Device stack handles USB enumeration, HID reports, Konami game compatibility
-- **DMA + PIO**: Encoder reading runs continuously without CPU intervention
-- **800kHz WS2812B**: Timing assumption in PIO program; verify for different LED types
-- **Pull-up switches**: Internal pull-ups enabled, logic inverted in code
-
-## Testing Validation Points
-
-- Rapid button presses for debounce algorithm effectiveness
-- Encoder direction verification using `ENC_REV[]` boolean array
-- RGB zone mapping matches `WS2812B_LED_ZONES` configuration
-- EAC anti-cheat compatibility (tested with specific USB descriptors)
+- USB descriptor structure/IDs, boot‑time button semantics, or task configuration—these impact compatibility (EAC/Konami spoofing and VS Code Pico tooling).
