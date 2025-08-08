@@ -27,7 +27,7 @@ void ws2812b_trail(uint32_t counter, bool hid_mode)
 
     float position_delta = 0.0f;
 
-    int enc_delta = (enc_val[0] - trail_prev_enc_val) * (ENC_REV[0] ? 1 : -1);
+    int enc_delta = (enc_val[0] - trail_prev_enc_val) * (ENC_REV[0] ? -1 : 1); // reverse the encoder value cuz i messed up the wiring lol
 
     // Check if encoder value has changed
     if (enc_delta != 0)
