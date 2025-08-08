@@ -4,10 +4,6 @@
  */
 #include "ws2812.pio.h"
 
-typedef struct {
-  uint8_t r, g, b;
-} RGB_t;
-
 /**
  * WS2812B RGB Format Helper
  **/

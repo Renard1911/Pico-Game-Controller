@@ -19,6 +19,12 @@
 #include "pico/stdlib.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+
+// RGB type definition (must be before RGB includes)
+typedef struct {
+  uint8_t r, g, b;
+} RGB_t;
+
 // clang-format off
 #include "debounce/debounce_include.h"
 #include "rgb/rgb_include.h"
@@ -36,7 +42,7 @@ bool kbm_report;
 
 uint64_t reactive_timeout_timestamp;
 
-void (*ws2812b_mode)();
+void (*ws2812b_mode)(uint32_t counter, bool hid_mode);
 void (*loop_mode)();
 uint16_t (*debounce_mode)();
 bool joy_mode_check = true;
@@ -66,9 +72,10 @@ void show() {
  * @param counter Current number of WS2812B cycles
  **/
 void ws2812b_update(uint32_t counter) {
-  if (time_us_64() - reactive_timeout_timestamp >= REACTIVE_TIMEOUT_MAX) {
+  bool hid_mode = time_us_64() - reactive_timeout_timestamp >= REACTIVE_TIMEOUT_MAX;
+  if (hid_mode) {
     // Use the RGB mode function to update the leds array
-    ws2812b_mode(counter);
+    ws2812b_mode(counter, hid_mode);
   } else {
     // Fill leds array with HID data (repeated for each zone)
     for (int i = 0; i < WS2812B_LED_ZONES; i++) {

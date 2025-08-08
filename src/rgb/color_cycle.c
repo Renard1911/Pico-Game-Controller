@@ -3,9 +3,7 @@
  * @author SpeedyPotato
  **/
 
-extern RGB_t leds[WS2812B_LED_SIZE];  // Reference to FastLED-style LED array
-
-void ws2812b_color_cycle(uint32_t counter) {
+void ws2812b_color_cycle(uint32_t counter, bool hid_mode) {
   for (int i = 0; i < WS2812B_LED_SIZE; ++i) {
     uint32_t color = color_wheel((counter + i * (int)(768 / WS2812B_LED_SIZE)) % 768);
     // Extract RGB from color and set in leds array

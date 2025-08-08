@@ -31,8 +31,6 @@
  * from suddenly appeaering.
  **/
 
-extern RGB_t leds[WS2812B_LED_SIZE];  // Reference to FastLED-style LED array
-
 #define TURBO_LIGHTS_CLAMP 0.1f
 #define TURBO_LIGHTS_THRESHOLD 0.05f
 #define TURBO_LIGHTS_DECAY 0.0005f
@@ -66,7 +64,7 @@ float turbo_lights_pos[ENC_GPIO_SIZE];
 float turbo_lights_brightness[ENC_GPIO_SIZE];
 int turbo_lights_idle[ENC_GPIO_SIZE];
 
-void turbocharger_color_cycle(uint32_t unused) {
+void turbocharger_color_cycle(uint32_t unused, bool hid_mode) {
   for (int i = 0; i < ENC_GPIO_SIZE; i++) {
     int enc_delta = (enc_val[i] - turbo_prev_enc_val[i]) * (ENC_REV[i] ? 1 : -1);
     turbo_prev_enc_val[i] = enc_val[i];
