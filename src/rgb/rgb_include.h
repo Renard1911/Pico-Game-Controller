@@ -6,6 +6,14 @@
  * Create lighting mode as desired and then add the #include here.
  **/
 
+// Forward declaration for RGB_t type (defined in main file)
+#ifndef RGB_T_DEFINED
+#define RGB_T_DEFINED
+typedef struct {
+  uint8_t r, g, b;
+} RGB_t;
+#endif
+
 extern uint32_t enc_val[ENC_GPIO_SIZE];
 extern RGB_t leds[WS2812B_LED_SIZE];  // Reference to FastLED-style LED array
 

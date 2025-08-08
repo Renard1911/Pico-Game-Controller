@@ -21,9 +21,12 @@
 #include "usb_descriptors.h"
 
 // RGB type definition (must be before RGB includes)
+#ifndef RGB_T_DEFINED
+#define RGB_T_DEFINED
 typedef struct {
   uint8_t r, g, b;
 } RGB_t;
+#endif
 
 // clang-format off
 #include "debounce/debounce_include.h"
