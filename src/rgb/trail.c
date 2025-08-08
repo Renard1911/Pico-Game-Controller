@@ -42,6 +42,12 @@ void ws2812b_trail(uint32_t counter, bool hid_mode) {
   // Apply trail effect to LEDs
   for (int i = 0; i < WS2812B_LED_SIZE; i++) {
     uint8_t brightness = trail_brightness[i];
+    
+    // Change palette based on counter to demonstrate different palettes
+    // This cycles through palettes every ~10 seconds at 200Hz
+    int demo_palette = (counter / 2000) % 9; // 9 palettes available (0-8)
+    set_color_palette(demo_palette);
+    
     // Create a color that shifts through the spectrum
     uint32_t color = color_wheel((i * 768 / WS2812B_LED_SIZE + counter / 4) % 768);
     
