@@ -13,6 +13,7 @@ static uint64_t last_encoder_change_time = 0;
 
 void ws2812b_trail(uint32_t counter, bool hid_mode)
 {
+    int TRAIL_DECAY_RATE = 2;
     // Initialize trail positions if not done yet
     if (!trail_initialized)
     {
@@ -23,9 +24,6 @@ void ws2812b_trail(uint32_t counter, bool hid_mode)
         last_encoder_change_time = time_us_64(); // Initialize timestamp
         trail_initialized = true;
     }
-
-    // Calculate encoder movement
-    uint32_t effect_val = hid_mode ? enc_val[0] : counter; // in iidx we only use one encoder
 
     float position_delta = 0.0f;
 
@@ -48,11 +46,13 @@ void ws2812b_trail(uint32_t counter, bool hid_mode)
     {
         // No encoder movement for 3+ seconds, use slow automatic movement
         position_delta = 0.05f;
+        TRAIL_DECAY_RATE = 4;
     }
     else
     {
         // Normal encoder-based movement
         position_delta = (float)enc_delta / ENC_PULSE * WS2812B_LED_SIZE;
+        TRAIL_DECAY_RATE = 16;
     } // Update all trail point positions
     for (int i = 0; i < NUM_TRAIL_POINTS; i++)
     {
@@ -67,7 +67,6 @@ void ws2812b_trail(uint32_t counter, bool hid_mode)
 
     // Decay all trail brightness values
 
-    int TRAIL_DECAY_RATE = 2;
     for (int i = 0; i < WS2812B_LED_SIZE; i++)
     {
         if (trail_brightness[i] > 0)
