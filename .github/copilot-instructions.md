@@ -2,95 +2,105 @@
 
 ## Architecture Overview
 
-This is a Raspberry Pi Pico-based IIDX/SDVX game controller firmware using TinyUSB, dual-core processing, and PIO state machines. The controller supports 10 buttons, 10 LEDs, 1 encoder, and WS2812B RGB strips with multiple operating modes.
+This is a Raspberry Pi Pico-based IIDX/SDVX game controller firmware using TinyUSB, dual-core processing, and PIO state machines for hardware-accelerated I/O. The controller supports 10 buttons, 10 LEDs, 1 encoder, and WS2812B RGB strips with runtime mode switching.
 
-### Core Components
+### Dual-Core Architecture & Communication
 
-- **Main Controller** (`src/pico_game_controller.c`): Single-threaded USB HID device on core 0
-- **RGB Lighting** (`src/rgb/`): Runs on core 1 with 5ms update cycle
-- **PIO State Machines**: Hardware-accelerated encoder reading and WS2812B output
-- **Modular Systems**: Pluggable debouncing algorithms and RGB effects
+- **Core 0**: Main USB HID loop, input scanning, mode switching, LED control (`pico_game_controller.c`)
+- **Core 1**: Dedicated WS2812B RGB lighting with 5ms update cycle (`core1_entry()`)
+- **Inter-core Communication**: Shared globals (`lights_report`, `enc_val`, timing variables) - no locks needed due to single-writer patterns
 
-### Dual-Core Architecture
+### Operating Mode System
 
-- **Core 0**: Main USB loop, input scanning, mode switching, LED control
-- **Core 1**: WS2812B RGB lighting effects only (launched via `multicore_launch_core1()`)
-- **Communication**: Shared global variables (`lights_report`, `enc_val`, timing variables)
+Boot-time button combinations determine controller behavior:
 
-### Operating Modes
+- **Default**: USB gamepad with HID joystick reports (`joy_mode()`)
+- **GPIO 2 held**: NKRO keyboard + mouse mode with alternating reports (`key_mode()`)
+- **GPIO 4 held**: Turbocharger RGB mode instead of color cycle
+- **GPIO 19 held**: Disables RGB entirely (core 1 not launched)
 
-The controller switches modes via button combinations held during boot:
+Mode switching logic in `init()` checks GPIO states before entering main loop.
 
-- **Default**: Gamepad mode with HID joystick reports
-- **Button 0 held**: NKRO Keyboard + Mouse mode (alternating reports)
-- **Button 1 held**: Turbocharger RGB mode instead of color cycle
-- **Button 8 held**: Disables RGB (core 1 not launched)
+## Hardware Configuration System
 
-## Key Configuration Patterns
+### Centralized Pin Management (`controller_config.h`)
 
-### Hardware Configuration (`controller_config.h`)
-
-All pin assignments, timing constants, and array sizes are centralized:
+All GPIO pins, array sizes, and timing constants defined here:
 
 ```c
-#define SW_GPIO_SIZE 10              // Drives array declarations
-const uint8_t SW_GPIO[] = {2, 4, 6, 8, 10, 12, 14, 16, 19, 21};
+#define SW_GPIO_SIZE 10              // Drives all array declarations
+const uint8_t SW_GPIO[] = {2, 4, 6, 8, 10, 12, 14, 16, 19, 21};  // Staggered for PCB routing
 const uint8_t LED_GPIO[] = {3, 5, 7, 9, 11, 13, 15, 17, 20, 18};
 ```
 
-Staggered pin layout enables easier PCB routing. All timing constants use microseconds.
+**Critical**: Arrays must match `SW_GPIO_SIZE`/`LED_GPIO_SIZE`. Staggered pin layout (2,3,4,5...) simplifies PCB design.
 
-### Modular Extensions
+### Pull-up Switch Logic
 
-#### Adding Debounce Algorithms (`src/debounce/`)
+Switches use internal pull-ups; GPIO reads are inverted:
 
-1. Create new `.c` file with function returning `uint16_t` button states
-2. Add `#include` to `debounce_include.h`
-3. Set `debounce_mode` function pointer in `init()`
+```c
+!gpio_get(SW_GPIO[i])  // true when pressed, false when released
+```
 
-#### Adding RGB Effects (`src/rgb/`)
+## Modular Extension Patterns
 
-1. Create function accepting `uint32_t counter` parameter
-2. Use `put_pixel(urgb_u32(r, g, b))` for output
-3. Add `#include` to `rgb_include.h`
-4. Set `ws2812b_mode` function pointer
+### Adding Debounce Algorithms (`src/debounce/`)
 
-## Build System & Development Workflow
+1. Create `.c` file with function signature: `uint16_t function_name()`
+2. Return button states as 16-bit mask (bit 0 = button 0, etc.)
+3. Add `#include "filename.c"` to `debounce_include.h`
+4. Set function pointer: `debounce_mode = &function_name;` in `init()`
 
-### CMake Structure
+See `eager.c` vs `deferred.c` for timestamp-based vs immediate debouncing patterns.
 
-- Root `CMakeLists.txt`: Pico SDK integration and VS Code extension compatibility
-- `src/CMakeLists.txt`: PIO header generation and TinyUSB linking
-- Automatic UF2 copy to `build_uf2/` for easy flashing
+### Adding RGB Effects (`src/rgb/`)
 
-### Essential Commands (VS Code Tasks)
+1. Create function: `void effect_name(uint32_t counter, bool hid_mode)`
+2. Manipulate global `leds[WS2812B_LED_SIZE]` array directly
+3. Use `put_pixel(urgb_u32(r, g, b))` or update `leds[]` then call `show()`
+4. Add `#include "filename.c"` to `rgb_include.h`
+5. Set function pointer: `ws2812b_mode = &effect_name;` in `init()`
 
-- **Compile**: Use "Compile Project" task (calls ninja in build/)
-- **Flash**: Use "Run Project" task (picotool load) or drag UF2 to mounted Pico
-- **Debug**: "Flash" task for OpenOCD debugging
+Counter increments every 5ms; `hid_mode` indicates HID vs reactive lighting state.
 
-### PIO Programs
+## Build System & Workflow
 
-- `encoders.pio`: Quadrature encoder state machine with optional debouncing
-- `ws2812.pio`: WS2812B bit-banging state machine
-- Generated headers included automatically by CMake
+### CMake + Pico SDK Integration
 
-## Critical Implementation Details
+- **Root CMakeLists.txt**: VS Code Pico extension compatibility, SDK path setup
+- **src/CMakeLists.txt**: PIO header generation, TinyUSB linking, automatic UF2 copy to `build_uf2/`
 
-### USB HID Reports
+### Essential VS Code Tasks
 
-- **Joystick**: 16-bit button mask + 2x8-bit joystick values
-- **Lights**: Button LEDs (10 bytes) + RGB zones (6 bytes)
-- **NKRO**: 32-byte keyboard report with modifier support
-- Report IDs defined in `usb_descriptors.h`, descriptors in `usb_descriptors.c`
+Use built-in tasks instead of terminal commands:
 
-### Timing-Critical Code
+- **"Compile Project"**: Builds via ninja in `build/` directory
+- **"Run Project"**: Uses picotool to flash over USB (Pico in BOOTSEL mode)
+- **"Flash"**: OpenOCD-based debugging/flashing (requires debug probe)
 
-- **Reactive lighting timeout**: 1 second fallback from HID to button-reactive LEDs
-- **Debouncing**: 4ms default, timestamp-based per-button
-- **Encoder rollover**: Careful modulo arithmetic to prevent uint32 overflow
+### PIO State Machine Programs
 
-### Memory Layout
+- **`encoders.pio`**: Quadrature encoder with debouncing, generates counts via DMA
+- **`ws2812.pio`**: 800kHz WS2812B bit-banging with precise timing
+- Headers auto-generated by CMake: `encoders.pio.h`, `ws2812.pio.h`
+
+## Critical Implementation Patterns
+
+### USB HID Report Structure
+
+Three report types with specific IDs (`usb_descriptors.h`):
+
+```c
+REPORT_ID_JOYSTICK = 1;   // 16-bit button mask + 2×8-bit joystick values
+REPORT_ID_LIGHTS = 2;     // 10 button LEDs + 6 RGB zone bytes
+REPORT_ID_KEYBOARD = 3;   // 32-byte NKRO report
+REPORT_ID_MOUSE = 4;      // Standard mouse with wheel support
+```
+
+### Memory-Efficient HID Data
+
+Union overlays structured access with raw bytes:
 
 ```c
 union {
@@ -99,18 +109,37 @@ union {
 } lights_report;
 ```
 
-HID light data directly overlays structured access for efficient USB handling.
+Direct USB buffer access without memcpy overhead.
 
-## Testing & Validation
+### Encoder Rollover Handling
 
-- Test button debouncing with rapid keypresses
-- Verify encoder direction with `ENC_REV[]` array
-- Check RGB zones match `WS2812B_LED_ZONES` configuration
-- Validate USB descriptor compliance with game software (EAC compatibility tested)
+Prevents uint32 overflow in gamepad mode where joystick range is 0-255:
 
-## Hardware Dependencies
+```c
+cur_enc_val[i] %= ENC_PULSE;  // ENC_PULSE = ENC_PPR * 4
+report.joy0 = ((double)cur_enc_val[0] / ENC_PULSE) * (UINT8_MAX + 1);
+```
 
-- TinyUSB device stack for USB HID
-- Pico SDK hardware APIs (PIO, DMA, multicore)
-- Pull-up switches (logic inverted in code)
-- 800kHz WS2812B timing assumption
+### Reactive Lighting Timeout
+
+1-second fallback from HID to button-reactive LEDs:
+
+```c
+bool hid_mode = time_us_64() - reactive_timeout_timestamp >= REACTIVE_TIMEOUT_MAX;
+```
+
+Updated whenever HID light data received; enables standalone operation.
+
+## Hardware-Specific Considerations
+
+- **TinyUSB**: Device stack handles USB enumeration, HID reports, Konami game compatibility
+- **DMA + PIO**: Encoder reading runs continuously without CPU intervention
+- **800kHz WS2812B**: Timing assumption in PIO program; verify for different LED types
+- **Pull-up switches**: Internal pull-ups enabled, logic inverted in code
+
+## Testing Validation Points
+
+- Rapid button presses for debounce algorithm effectiveness
+- Encoder direction verification using `ENC_REV[]` boolean array
+- RGB zone mapping matches `WS2812B_LED_ZONES` configuration
+- EAC anti-cheat compatibility (tested with specific USB descriptors)
