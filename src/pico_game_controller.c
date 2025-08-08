@@ -41,6 +41,9 @@ void (*loop_mode)();
 uint16_t (*debounce_mode)();
 bool joy_mode_check = true;
 
+// FastLED-style LED array
+RGB_t leds[WS2812B_LED_SIZE];
+
 union {
   struct {
     uint8_t buttons[LED_GPIO_SIZE];
@@ -50,21 +53,37 @@ union {
 } lights_report;
 
 /**
+ * FastLED-style show function - renders the entire LED array
+ **/
+void show() {
+  for (int i = 0; i < WS2812B_LED_SIZE; i++) {
+    put_pixel(urgb_u32(leds[i].r, leds[i].g, leds[i].b));
+  }
+}
+
+/**
  * WS2812B Lighting
  * @param counter Current number of WS2812B cycles
  **/
 void ws2812b_update(uint32_t counter) {
   if (time_us_64() - reactive_timeout_timestamp >= REACTIVE_TIMEOUT_MAX) {
+    // Use the RGB mode function to update the leds array
     ws2812b_mode(counter);
   } else {
+    // Fill leds array with HID data (repeated for each zone)
     for (int i = 0; i < WS2812B_LED_ZONES; i++) {
       for (int j = 0; j < WS2812B_LEDS_PER_ZONE; j++) {
-        put_pixel(urgb_u32(lights_report.lights.rgb[i].r,
-                           lights_report.lights.rgb[i].g,
-                           lights_report.lights.rgb[i].b));
+        int led_index = i * WS2812B_LEDS_PER_ZONE + j;
+        if (led_index < WS2812B_LED_SIZE) {
+          leds[led_index].r = lights_report.lights.rgb[i].r;
+          leds[led_index].g = lights_report.lights.rgb[i].g;
+          leds[led_index].b = lights_report.lights.rgb[i].b;
+        }
       }
     }
   }
+  // Render the entire LED array at once
+  show();
 }
 
 /**

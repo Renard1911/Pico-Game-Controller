@@ -31,6 +31,8 @@
  * from suddenly appeaering.
  **/
 
+extern RGB_t leds[WS2812B_LED_SIZE];  // Reference to FastLED-style LED array
+
 #define TURBO_LIGHTS_CLAMP 0.1f
 #define TURBO_LIGHTS_THRESHOLD 0.05f
 #define TURBO_LIGHTS_DECAY 0.0005f
@@ -101,10 +103,9 @@ void turbocharger_color_cycle(uint32_t unused) {
     float l_strength = (1.0f - f_clamp(f_abs(turbo_lights_pos[0] - pos), 0.0f, 2.0f) / 2) * turbo_lights_brightness[0];
     float r_strength = (1.0f - f_clamp(f_abs(turbo_lights_pos[1] - pos), 0.0f, 2.0f) / 2) * turbo_lights_brightness[1];
 
-    put_pixel(urgb_u32(
-      i_clamp(l_strength * 70 + r_strength * 250, 0, 255),
-      i_clamp(l_strength * 230 + r_strength * 60, 0, 255),
-      i_clamp(l_strength * 250 + r_strength * 200, 0, 255)
-    ));
+    // Set colors in leds array instead of calling put_pixel directly
+    leds[i].r = i_clamp(l_strength * 70 + r_strength * 250, 0, 255);
+    leds[i].g = i_clamp(l_strength * 230 + r_strength * 60, 0, 255);
+    leds[i].b = i_clamp(l_strength * 250 + r_strength * 200, 0, 255);
   }
 }
