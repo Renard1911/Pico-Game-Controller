@@ -54,6 +54,10 @@ bool joy_mode_check = true;
 // FastLED-style LED array
 RGB_t leds[WS2812B_LED_SIZE];
 
+// Expose button states and HID RGB colors to RGB effects (single-writer: core 0)
+volatile uint16_t g_buttons = 0;
+RGB_t hid_rgb[WS2812B_LED_ZONES];
+
 union
 {
   struct
@@ -363,6 +367,7 @@ int main(void)
     tud_task(); // tinyusb device task
     update_inputs();
     report.buttons = debounce_mode();
+    g_buttons = report.buttons; // publish to effects
     loop_mode();
     update_lights();
   }
@@ -401,6 +406,11 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
     for (i; i < sizeof(lights_report); i++)
     {
       lights_report.raw[i] = buffer[i];
+    }
+    // Cache HID RGB colors for effects
+    for (int z = 0; z < WS2812B_LED_ZONES; ++z)
+    {
+      hid_rgb[z] = lights_report.lights.rgb[z];
     }
     reactive_timeout_timestamp = time_us_64();
   }

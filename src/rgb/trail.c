@@ -115,4 +115,3 @@ void ws2812b_trail(uint32_t counter, bool hid_mode)
         leds[i].b = ((color & 0xFF) * brightness) / 255;
     }
 }
-//
