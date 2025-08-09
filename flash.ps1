@@ -3,7 +3,8 @@
 
 param(
     [switch]$SkipBuild,
-    [int]$Timeout = 30
+    [int]$Timeout = 30,
+    [switch]$ForcePicotool
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,8 @@ $UF2Source = Join-Path $BuildDir "src\Pico_Game_Controller.uf2"
 $UF2Backup = Join-Path $ProjectRoot "build_uf2\Pico_Game_Controller.uf2"
 $NinjaPath = "$env:USERPROFILE\.pico-sdk\ninja\v1.12.1\ninja.exe"
 $PicotoolPath = "$env:USERPROFILE\.pico-sdk\picotool\2.2.0\picotool\picotool.exe"
+# Venv python (normalized path)
+$VenvPython = Join-Path (Join-Path $ProjectRoot '.venv') 'Scripts/python.exe'
 
 # Color functions
 function Write-Step($Step, $Message) {
@@ -78,6 +81,17 @@ function Invoke-Build {
 function Enter-BootselMode {
     Write-Step "2/4" "Entering BOOTSEL mode..."
     
+    # Try HID Feature report (0x03) first unless forced to use picotool
+    if (-not $ForcePicotool) {
+        if (Invoke-BootselViaHID) {
+            Write-Success "BOOTSEL command sent via HID"
+            Start-Sleep -Milliseconds 500
+            return $true
+        } else {
+            Write-Warning-Custom "HID reboot failed; falling back to picotool"
+        }
+    }
+
     if (-not (Test-Path $PicotoolPath)) {
         Write-Error-Custom "Picotool not found at: $PicotoolPath"
         return $false
@@ -90,16 +104,75 @@ function Enter-BootselMode {
             Write-Host "Device found, rebooting to BOOTSEL mode..."
             & $PicotoolPath reboot -f 2>$null
             Start-Sleep -Seconds 3
+            Write-Success "BOOTSEL mode command sent (picotool)"
+            return $true
         } else {
-            Write-Warning-Custom "Device not found in normal mode"
+            Write-Warning-Custom "Device not found in normal mode (picotool)"
+            return $true  # continue to wait for manual/other reboot
         }
-        
-        Write-Success "BOOTSEL mode command sent"
-        return $true
     }
     catch {
         Write-Warning-Custom "Failed to communicate with device: $_"
         return $true  # Continue anyway
+    }
+}
+
+# Send HID Feature report 0x03 (reboot to BOOTSEL) using Python + hidapi
+function Invoke-BootselViaHID {
+    try {
+        # Determine Python executable and args
+        $pyExe = $null
+        $pyArgs = @()
+        if (Test-Path $VenvPython) {
+            $pyExe = $VenvPython
+        } else {
+            $cmd = Get-Command python -ErrorAction SilentlyContinue
+            if ($cmd) {
+                $pyExe = $cmd.Source
+            } else {
+                $cmd = Get-Command py -ErrorAction SilentlyContinue
+                if ($cmd) {
+                    $pyExe = $cmd.Source
+                    $pyArgs = @('-3')
+                }
+            }
+        }
+        if (-not $pyExe) {
+            Write-Warning-Custom "Python not found; cannot send HID command"
+            return $false
+        }
+
+        # Ensure hidapi is available if using venv
+        $Req = Join-Path $ProjectRoot 'tools/requirements.txt'
+        if ($pyExe -eq $VenvPython -and (Test-Path $Req)) {
+            & $pyExe @($pyArgs) -m pip install -q -r $Req 2>$null | Out-Null
+        }
+
+        # Use the existing config tool to send the HID reboot command
+        $tool = Join-Path $ProjectRoot 'tools/effect_selector.py'
+        if (-not (Test-Path $tool)) {
+            Write-Warning-Custom "Config tool not found: $tool"
+            return $false
+        }
+    Write-Host "Using Python: $pyExe" -ForegroundColor Gray
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+        $stderrFile = [System.IO.Path]::GetTempFileName()
+        $argList = @()
+        if ($pyArgs) { $argList += $pyArgs }
+    $argList += @($tool, '--reboot-bootsel')
+    Write-Host "Invoking: $pyExe $($argList -join ' ')" -ForegroundColor Gray
+        $p = Start-Process -FilePath $pyExe -ArgumentList $argList -NoNewWindow -Wait -PassThru -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
+    $outText = Get-Content -Path $stdoutFile -Raw -ErrorAction SilentlyContinue
+    $errText = Get-Content -Path $stderrFile -Raw -ErrorAction SilentlyContinue
+    if ($outText) { Write-Host $outText }
+    if ($errText) { Write-Warning-Custom $errText }
+    $code = $p.ExitCode
+        Remove-Item -Path $stdoutFile,$stderrFile -Force -ErrorAction SilentlyContinue | Out-Null
+    if ($code -eq 0) { return $true } else { return $false }
+    }
+    catch {
+        Write-Warning-Custom "HID reboot exception: $_"
+        return $false
     }
 }
 

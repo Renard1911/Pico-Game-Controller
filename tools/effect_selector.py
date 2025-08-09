@@ -283,5 +283,17 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
+    # Headless CLI: send reboot-to-bootloader if requested
+    if "--reboot-bootsel" in sys.argv:
+        try:
+            dev = open_device()
+            reboot_to_bootsel(dev)
+            print("OK: reboot command sent")
+            sys.exit(0)
+        except HIDErrors as e:
+            log("cli reboot error:", e)
+            print(f"ERR: {e}")
+            sys.exit(1)
+    # Default: launch GUI
     app = App()
     app.mainloop()
