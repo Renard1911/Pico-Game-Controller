@@ -143,6 +143,14 @@ static void set_effect_by_id(uint8_t id)
     ws2812b_mode = &ws_palette_tint_gradient;
     current_effect_id = EFFECT_PALETTE_TINT_GRADIENT;
     break;
+  case EFFECT_MULTIPOINT_SNAP:
+    ws2812b_mode = &ws_multipoint_snap;
+    current_effect_id = EFFECT_MULTIPOINT_SNAP;
+    break;
+  case EFFECT_CENTER_PULSE:
+    ws2812b_mode = &ws_center_pulse;
+    current_effect_id = EFFECT_CENTER_PULSE;
+    break;
   case EFFECT_SECTOR_EQUALIZER:
     ws2812b_mode = &ws_sector_equalizer;
     current_effect_id = EFFECT_SECTOR_EQUALIZER;
