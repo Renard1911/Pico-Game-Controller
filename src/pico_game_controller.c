@@ -19,6 +19,9 @@
 #include "pico/stdlib.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
+// Flash persistence
+#include "hardware/flash.h"
+#include "hardware/sync.h"
 
 // RGB type definition (must be before RGB includes)
 #ifndef RGB_T_DEFINED
@@ -30,6 +33,29 @@ typedef struct
 #endif
 
 // clang-format off
+
+// ---- Persistent settings (flash) ----
+#ifndef PICO_FLASH_SIZE_BYTES
+#define PICO_FLASH_SIZE_BYTES (2 * 1024 * 1024)
+#endif
+#define FLASH_SECTOR_SZ 4096
+#define FLASH_PAGE_SZ 256
+#define SETTINGS_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SZ) // last sector
+
+typedef struct __attribute__((packed))
+{
+  uint32_t magic;      // 'CFG1'
+  uint8_t version;     // 1
+  uint8_t effect_id;   // 0..N
+  uint8_t brightness;  // 0..255
+  uint8_t reserved;    // padding
+  uint32_t reserved2;  // future
+} settings_t;
+
+static const uint32_t SETTINGS_MAGIC = 0x31474643u; // 'CFG1' LE
+static void load_settings(void);
+static void save_settings(void);
+
 #include "debounce/debounce_include.h"
 #include "rgb/rgb_include.h"
 // clang-format on
@@ -114,14 +140,6 @@ static void set_effect_by_id(uint8_t id)
     ws2812b_mode = &ws_palette_tint_gradient;
     current_effect_id = EFFECT_PALETTE_TINT_GRADIENT;
     break;
-  case EFFECT_MULTIPOINT_SNAP:
-    ws2812b_mode = &ws_multipoint_snap;
-    current_effect_id = EFFECT_MULTIPOINT_SNAP;
-    break;
-  case EFFECT_CENTER_PULSE:
-    ws2812b_mode = &ws_center_pulse;
-    current_effect_id = EFFECT_CENTER_PULSE;
-    break;
   case EFFECT_SECTOR_EQUALIZER:
     ws2812b_mode = &ws_sector_equalizer;
     current_effect_id = EFFECT_SECTOR_EQUALIZER;
@@ -131,6 +149,44 @@ static void set_effect_by_id(uint8_t id)
     current_effect_id = EFFECT_RADAR_SWEEP;
     break;
   }
+}
+
+// ---- Persistent settings (flash) implementation (after effect state is defined) ----
+static void load_settings(void)
+{
+  const uint8_t *flash_ptr = (const uint8_t *)(XIP_BASE + SETTINGS_FLASH_OFFSET);
+  const settings_t *s = (const settings_t *)flash_ptr;
+  if (s->magic == SETTINGS_MAGIC && s->version == 1)
+  {
+    if (s->effect_id <= EFFECT_RADAR_SWEEP)
+    {
+      current_effect_id = s->effect_id;
+    }
+    g_brightness = s->brightness;
+  }
+}
+
+static void save_settings(void)
+{
+  settings_t s = {
+      .magic = SETTINGS_MAGIC,
+      .version = 1,
+      .effect_id = current_effect_id,
+      .brightness = g_brightness,
+      .reserved = 0,
+      .reserved2 = 0,
+  };
+
+  // Prepare a page buffer (0xFF filled)
+  uint8_t page[FLASH_PAGE_SZ];
+  for (int i = 0; i < FLASH_PAGE_SZ; ++i)
+    page[i] = 0xFF;
+  memcpy(page, &s, sizeof(s));
+
+  uint32_t ints = save_and_disable_interrupts();
+  flash_range_erase(SETTINGS_FLASH_OFFSET, FLASH_SECTOR_SZ);
+  flash_range_program(SETTINGS_FLASH_OFFSET, page, FLASH_PAGE_SZ);
+  restore_interrupts(ints);
 }
 
 // FastLED-style LED array
@@ -197,14 +253,8 @@ void update_lights()
     }
     else
     {
-      if (lights_report.lights.buttons[i] == 0)
-      {
-        gpio_put(LED_GPIO[i], 0);
-      }
-      else
-      {
-        gpio_put(LED_GPIO[i], 1);
-      }
+      // Use HID-provided light state
+      gpio_put(LED_GPIO[i], lights_report.lights.buttons[i] ? 1 : 0);
     }
   }
 }
@@ -418,15 +468,9 @@ void init()
     joy_mode_check = true;
   }
 
-  // RGB Mode Switching (no demo by default)
-  if (!gpio_get(SW_GPIO[1]))
-  {
-    set_effect_by_id(EFFECT_TURBOCHARGER);
-  }
-  else
-  {
-    set_effect_by_id(EFFECT_RADAR_SWEEP);
-  }
+  // Load persisted settings (effect + brightness), allow boot override for Turbocharger
+  load_settings();
+  set_effect_by_id(current_effect_id);
 
   // Debouncing Mode
   debounce_mode = &debounce_eager;
@@ -519,12 +563,14 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
       {
         uint8_t id = buffer[1];
         set_effect_by_id(id);
+        save_settings();
       }
       break;
     case 0x02: // SET_BRIGHTNESS
       if (bufsize >= 2)
       {
         g_brightness = buffer[1]; // 0..255
+        save_settings();
       }
       break;
     default:
