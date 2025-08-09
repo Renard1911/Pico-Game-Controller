@@ -26,6 +26,7 @@ REPORT_ID_CONFIG = 5
 # Commands
 CMD_SET_EFFECT = 0x01
 CMD_SET_BRIGHTNESS = 0x02
+CMD_REBOOT_BOOTSEL = 0x03
 
 EFFECTS = [
     (0, "Color Cycle"),
@@ -79,6 +80,12 @@ def set_brightness(dev, value: int):
     dev.send_feature_report(bytes(payload))
 
 
+def reboot_to_bootsel(dev):
+    """Ask firmware to reboot into BOOTSEL (UF2) mode."""
+    payload = [REPORT_ID_CONFIG, CMD_REBOOT_BOOTSEL] + [0] * 7
+    dev.send_feature_report(bytes(payload))
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -122,6 +129,12 @@ class App(tk.Tk):
         self.btn_refresh.grid(row=2, column=0, pady=(12, 0), sticky="w")
         self.btn_apply = ttk.Button(frm, text="Apply", command=self.apply)
         self.btn_apply.grid(row=2, column=1, pady=(12, 0), sticky="e")
+
+        # Reboot to BOOTSEL button
+        self.btn_bootsel = ttk.Button(
+            frm, text="Reboot to BOOTSEL", command=self.on_bootsel
+        )
+        self.btn_bootsel.grid(row=2, column=2, pady=(12, 0), sticky="e")
 
         self.status_var = tk.StringVar(value="Not connected")
         ttk.Label(frm, textvariable=self.status_var).grid(
@@ -167,6 +180,21 @@ class App(tk.Tk):
             set_brightness(self.dev, bri)
             self.status_var.set(
                 f"Applied: {EFFECTS[idx][1]}, Brightness {bri}")
+        except HIDErrors as e:
+            messagebox.showerror("Error", str(e))
+
+    def on_bootsel(self):
+        if not self.dev:
+            messagebox.showwarning("Device", "Not connected")
+            return
+        if not messagebox.askyesno(
+            "Reboot to BOOTSEL",
+            "The device will reboot into BOOTSEL (UF2) mode. Continue?",
+        ):
+            return
+        try:
+            reboot_to_bootsel(self.dev)
+            self.status_var.set("Rebooting to BOOTSEL…")
         except HIDErrors as e:
             messagebox.showerror("Error", str(e))
 

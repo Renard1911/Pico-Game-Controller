@@ -17,6 +17,7 @@
 #include "hardware/pio.h"
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
+#include "pico/bootrom.h"
 #include "tusb.h"
 #include "usb_descriptors.h"
 // Flash persistence
@@ -76,6 +77,8 @@ void (*ws2812b_mode)(uint32_t counter, bool hid_mode);
 void (*loop_mode)();
 uint16_t (*debounce_mode)();
 bool joy_mode_check = true;
+// Deferred actions from USB callbacks
+static volatile bool g_request_bootsel = false;
 
 // RGB effect selection
 enum
@@ -499,6 +502,18 @@ int main(void)
     g_buttons = report.buttons; // publish to effects
     loop_mode();
     update_lights();
+
+    // Handle deferred reboot to BOOTSEL (triggered by HID Feature command)
+    if (g_request_bootsel)
+    {
+      // Small delay to allow control transfer to finish
+      sleep_ms(10);
+      // Jump to UF2 bootloader (BOOTSEL)
+      reset_usb_boot(0, 0);
+      // Should not return; just in case
+      while (1)
+        tight_loop_contents();
+    }
   }
 
   return 0;
@@ -572,6 +587,10 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
         g_brightness = buffer[1]; // 0..255
         save_settings();
       }
+      break;
+    case 0x03: // REBOOT_TO_BOOTSEL
+      // Defer actual reboot to main loop to avoid disrupting control transfer
+      g_request_bootsel = true;
       break;
     default:
       break;
