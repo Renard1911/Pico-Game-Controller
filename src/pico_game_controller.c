@@ -51,6 +51,88 @@ void (*loop_mode)();
 uint16_t (*debounce_mode)();
 bool joy_mode_check = true;
 
+// RGB effect selection
+enum
+{
+  EFFECT_COLOR_CYCLE = 0,
+  EFFECT_TURBOCHARGER = 1,
+  EFFECT_TRAIL = 2,
+  EFFECT_DUAL_ORBIT = 3,
+  EFFECT_VELOCITY_COMET = 4,
+  EFFECT_BUTTON_RIPPLES = 5,
+  EFFECT_SPOKES = 6,
+  EFFECT_COUNTER_STRIPES = 7,
+  EFFECT_PALETTE_TINT_GRADIENT = 8,
+  EFFECT_MULTIPOINT_SNAP = 9,
+  EFFECT_CENTER_PULSE = 10,
+  EFFECT_SECTOR_EQUALIZER = 11,
+  EFFECT_RADAR_SWEEP = 12,
+};
+
+static uint8_t current_effect_id = EFFECT_COLOR_CYCLE;
+static uint8_t g_brightness = 255; // 0..255 scaling for WS2812B output
+
+static void set_effect_by_id(uint8_t id)
+{
+  // Update global pointer; core 1 will use it next frame
+  switch (id)
+  {
+  default:
+  case EFFECT_COLOR_CYCLE:
+    ws2812b_mode = &ws2812b_color_cycle;
+    current_effect_id = EFFECT_COLOR_CYCLE;
+    break;
+  case EFFECT_TURBOCHARGER:
+    ws2812b_mode = &turbocharger_color_cycle;
+    current_effect_id = EFFECT_TURBOCHARGER;
+    break;
+  case EFFECT_TRAIL:
+    ws2812b_mode = &ws2812b_trail;
+    current_effect_id = EFFECT_TRAIL;
+    break;
+  case EFFECT_DUAL_ORBIT:
+    ws2812b_mode = &ws_dual_orbit;
+    current_effect_id = EFFECT_DUAL_ORBIT;
+    break;
+  case EFFECT_VELOCITY_COMET:
+    ws2812b_mode = &ws_velocity_comet;
+    current_effect_id = EFFECT_VELOCITY_COMET;
+    break;
+  case EFFECT_BUTTON_RIPPLES:
+    ws2812b_mode = &ws_button_ripples;
+    current_effect_id = EFFECT_BUTTON_RIPPLES;
+    break;
+  case EFFECT_SPOKES:
+    ws2812b_mode = &ws_spokes;
+    current_effect_id = EFFECT_SPOKES;
+    break;
+  case EFFECT_COUNTER_STRIPES:
+    ws2812b_mode = &ws_counter_stripes;
+    current_effect_id = EFFECT_COUNTER_STRIPES;
+    break;
+  case EFFECT_PALETTE_TINT_GRADIENT:
+    ws2812b_mode = &ws_palette_tint_gradient;
+    current_effect_id = EFFECT_PALETTE_TINT_GRADIENT;
+    break;
+  case EFFECT_MULTIPOINT_SNAP:
+    ws2812b_mode = &ws_multipoint_snap;
+    current_effect_id = EFFECT_MULTIPOINT_SNAP;
+    break;
+  case EFFECT_CENTER_PULSE:
+    ws2812b_mode = &ws_center_pulse;
+    current_effect_id = EFFECT_CENTER_PULSE;
+    break;
+  case EFFECT_SECTOR_EQUALIZER:
+    ws2812b_mode = &ws_sector_equalizer;
+    current_effect_id = EFFECT_SECTOR_EQUALIZER;
+    break;
+  case EFFECT_RADAR_SWEEP:
+    ws2812b_mode = &ws_radar_sweep;
+    current_effect_id = EFFECT_RADAR_SWEEP;
+    break;
+  }
+}
+
 // FastLED-style LED array
 RGB_t leds[WS2812B_LED_SIZE];
 
@@ -75,7 +157,11 @@ void show()
 {
   for (int i = 0; i < WS2812B_LED_SIZE; i++)
   {
-    put_pixel(urgb_u32(leds[i].r, leds[i].g, leds[i].b));
+    // Apply global brightness scaling at output time
+    uint8_t r = (uint16_t)leds[i].r * g_brightness / 255;
+    uint8_t g = (uint16_t)leds[i].g * g_brightness / 255;
+    uint8_t b = (uint16_t)leds[i].b * g_brightness / 255;
+    put_pixel(urgb_u32(r, g, b));
   }
 }
 
@@ -332,15 +418,14 @@ void init()
     joy_mode_check = true;
   }
 
-  // RGB Mode Switching
+  // RGB Mode Switching (no demo by default)
   if (!gpio_get(SW_GPIO[1]))
   {
-    ws2812b_mode = &turbocharger_color_cycle;
+    set_effect_by_id(EFFECT_TURBOCHARGER);
   }
   else
   {
-    // Default to demo that cycles through all effects
-    ws2812b_mode = &ws_demo_all;
+    set_effect_by_id(EFFECT_RADAR_SWEEP);
   }
 
   // Debouncing Mode
@@ -384,10 +469,18 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
 {
   // TODO not Implemented
   (void)itf;
-  (void)report_id;
-  (void)report_type;
-  (void)buffer;
   (void)reqlen;
+
+  if (report_id == REPORT_ID_CONFIG && report_type == HID_REPORT_TYPE_FEATURE)
+  {
+    // Return 8-byte config payload: [cmd=0x00 status, effect_id, ...]
+    buffer[0] = 0x00; // status OK
+    buffer[1] = current_effect_id;
+    buffer[2] = g_brightness;
+    for (int i = 3; i < 8; ++i)
+      buffer[i] = 0;
+    return 8;
+  }
 
   return 0;
 }
@@ -413,5 +506,29 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
       hid_rgb[z] = lights_report.lights.rgb[z];
     }
     reactive_timeout_timestamp = time_us_64();
+  }
+  else if (report_id == REPORT_ID_CONFIG && report_type == HID_REPORT_TYPE_FEATURE && bufsize >= 1)
+  {
+    // Feature report command handling
+    // Layout: [cmd, arg0, arg1, ...] up to 8 bytes
+    uint8_t cmd = buffer[0];
+    switch (cmd)
+    {
+    case 0x01: // SET_EFFECT
+      if (bufsize >= 2)
+      {
+        uint8_t id = buffer[1];
+        set_effect_by_id(id);
+      }
+      break;
+    case 0x02: // SET_BRIGHTNESS
+      if (bufsize >= 2)
+      {
+        g_brightness = buffer[1]; // 0..255
+      }
+      break;
+    default:
+      break;
+    }
   }
 }

@@ -11,20 +11,21 @@ Architecture (what runs where)
 Boot-time behavior (read GPIO via internal pull‑ups)
 
 - Hold `SW_GPIO[0]` to start in NKRO keyboard/mouse mode; otherwise default to joystick gamepad.
-- Hold `SW_GPIO[1]` to select Turbocharger LEDs; otherwise Trail effect.
+- Hold `SW_GPIO[1]` to select Turbocharger LEDs; otherwise default effect is Color Cycle.
 - Hold `SW_GPIO[8]` to disable RGB (prevents launching core 1).
   Pins live in `src/controller_config.h` (e.g., `SW_GPIO[] = {2,4,6,8,10,12,14,16,19,21}`); update there only, and keep sizes consistent with `*_SIZE` defines.
 
 HID and data flow
 
-- Report IDs in `src/usb_descriptors.h`: 1=Joystick, 2=Lights, 3=NKRO, 4=Mouse. Descriptors size depends on `SW_GPIO_SIZE`, `LED_GPIO_SIZE`, `WS2812B_LED_ZONES`.
+- Report IDs in `src/usb_descriptors.h`: 1=Joystick, 2=Lights, 3=NKRO, 4=Mouse, 5=Config (vendor Feature report). Descriptor sizes depend on `SW_GPIO_SIZE`, `LED_GPIO_SIZE`, `WS2812B_LED_ZONES`.
 - Lights: OUT reports populate `lights_report.raw[...]`; if no HID lights for `REACTIVE_TIMEOUT_MAX` (1s), fall back to button‑reactive LEDs in `update_lights()`.
 - Encoder to joystick: modulo wrap with `ENC_PULSE` (PPR×4), scaled to 0–255.
+- Config Feature report (Report ID 5): 8-byte payload `[cmd, arg0..arg6]`. Commands: `0x01=SET_EFFECT (arg0=effect_id)`. GET_FEATURE returns `[status=0x00, current_effect, 0..]`.
 
 Project conventions (important when adding features)
 
 - Debounce modes live in `src/debounce/`. Add a `uint16_t my_algo()` and include it in `debounce_include.h`; select via `debounce_mode = &my_algo;` in `init()`.
-- RGB effects live in `src/rgb/`. Add `void my_effect(uint32_t counter, bool hid_mode)`; include in `rgb_include.h`; select via `ws2812b_mode = &my_effect;`. Write colors into the global `leds[]`; frame is emitted by `show()`.
+- RGB effects live in `src/rgb/`. Add `void my_effect(uint32_t counter, bool hid_mode)`; include in `rgb_include.h`; select via `ws2812b_mode = &my_effect;` or map it in `set_effect_by_id()` in `src/pico_game_controller.c`. Write colors into the global `leds[]`; frame is emitted by `show()`.
 - Switches use pull‑ups; pressed means `!gpio_get(SW_GPIO[i])`.
 
 Build, flash, debug (Windows/VS Code Pico extension)

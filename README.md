@@ -11,6 +11,8 @@ Key features
 - HID-controlled button LEDs with reactive fallback when host stops sending.
 - WS2812B RGB runs on core 1 with PIO; effects use a palette system.
 - Two HID RGB “zones” for host-driven color accents.
+- Host configuration channel (HID Feature report) to switch RGB effect on the fly; simple Tkinter GUI included.
+  - Also supports global brightness control (0–255).
 
 Boot-time controls (hold while powering/resetting)
 
@@ -20,7 +22,7 @@ Boot-time controls (hold while powering/resetting)
 
 LED effects
 
-- Default: Demo All — cycles through all effects with smooth crossfades.
+- Default: Color Cycle. You can change the active effect from the PC via the GUI tool.
 - Built-in effects include: Turbocharger, Trail, Color Cycle, Dual Orbit, Velocity Comet, Button Ripples, Spokes, Counter Stripes, Palette Tint Gradient, Multipoint Snap, Center Pulse, Sector Equalizer, Radar Sweep.
 - HID lights: if no OUT report arrives for 1s, the firmware falls back to button‑reactive LEDs.
 
@@ -43,8 +45,29 @@ Build and flash (VS Code tasks)
 
 Notes
 
-- The default RGB effect is “Demo All”. To choose a fixed effect, set `ws2812b_mode` in `init()` (see `src/pico_game_controller.c`).
+- The default RGB effect is Color Cycle. To choose a fixed effect in firmware, set `ws2812b_mode` (or use `set_effect_by_id()`) in `init()` (see `src/pico_game_controller.c`).
 - Two HID RGB color zones are available to effects via `hid_rgb[]`.
+
+PC configuration tool (Tkinter)
+
+- A small GUI to switch the RGB effect at runtime is provided at `tools/effect_selector.py`.
+- Requirements (Windows): Python 3 and `hidapi`.
+
+Try it
+
+```powershell
+pip install -r tools/requirements.txt
+python tools/effect_selector.py
+```
+
+HID config channel details (for integrators)
+
+- Report IDs (`src/usb_descriptors.h`): 1=Joystick, 2=Lights, 3=NKRO, 4=Mouse, 5=Config.
+- Config uses a vendor page Feature report (8 bytes payload): `[cmd, arg0..arg6]`.
+  - GET_FEATURE (Report ID 5) returns 8 bytes: `[status=0x00, current_effect, 0..]`.
+  - GET_FEATURE layout: `[status=0x00, effect_id, brightness, 0..]`.
+  - SET_EFFECT: host sends Feature report (Report ID 5) with `[0x01, effect_id]`.
+  - SET_BRIGHTNESS: host sends Feature report (Report ID 5) with `[0x02, brightness]` (0–255).
 
 Credits and license
 

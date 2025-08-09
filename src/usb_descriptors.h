@@ -5,11 +5,13 @@
 #include "controller_config.h"
 #include "device/usbd.h"
 
-enum {
+enum
+{
   REPORT_ID_JOYSTICK = 1,
   REPORT_ID_LIGHTS,
   REPORT_ID_KEYBOARD,
   REPORT_ID_MOUSE,
+  REPORT_ID_CONFIG,
 };
 
 // because they are missing from tusb_hid.h
@@ -61,5 +63,16 @@ enum {
       HID_LOGICAL_MIN(0), HID_LOGICAL_MAX(1),                                 \
       HID_USAGE_PAGE(HID_USAGE_PAGE_KEYBOARD), HID_USAGE_MIN(0),              \
       HID_USAGE_MAX(31 * 8 - 1), HID_INPUT(HID_VARIABLE), HID_COLLECTION_END
+
+// Vendor-specific Feature report for configuration/commands
+// Layout (bytes): [cmd, arg0, arg1, arg2, arg3, arg4, arg5, arg6]
+#define GAMECON_REPORT_DESC_CONFIG(...)                                \
+  HID_USAGE_PAGE_N(0xFFAF, 2), /* vendor */                            \
+      HID_USAGE(0x01), HID_COLLECTION(HID_COLLECTION_APPLICATION),     \
+      __VA_ARGS__ HID_LOGICAL_MIN(0x00), HID_LOGICAL_MAX_N(0x00ff, 2), \
+      HID_REPORT_SIZE(8), HID_REPORT_COUNT(8),                         \
+      HID_USAGE(0x01),                                                 \
+      HID_FEATURE(HID_DATA | HID_VARIABLE | HID_ABSOLUTE),             \
+      HID_COLLECTION_END
 
 #endif /* USB_DESCRIPTORS_H_ */
