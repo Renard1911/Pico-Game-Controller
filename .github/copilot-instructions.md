@@ -1,53 +1,56 @@
 # Pico Game Controller — AI Coding Instructions
 
-Purpose: Make quick, correct edits to this Pico (RP2040) firmware by following project-specific patterns and workflows.
+Goal: Make fast, correct edits to this RP2040 firmware by following the repo’s patterns and workflows.
 
-Architecture (what runs where)
+## Architecture (what runs where)
 
-- Core 0: USB HID device loop + input scan + mode/LED logic. See `src/pico_game_controller.c` (main, `joy_mode()`, `key_mode()`, `update_lights()`).
-- Core 1: WS2812B rendering loop (`core1_entry()` runs every ~5ms). Only launched if RGB isn’t disabled at boot.
-- PIO/DMA: `encoders.pio` feeds `enc_val[]` via DMA; `ws2812.pio` drives LEDs at 800kHz. Headers are auto-generated into `build/src/…` and referenced as `encoders.pio.h`, `ws2812.pio.h`.
+- Core 0: USB HID device task + input scan + mode/LED logic. See `src/pico_game_controller.c` (main, `joy_mode()`, `key_mode()`, `update_lights()`).
+- Core 1: WS2812B renderer (`core1_entry()` ~5 ms). Launched only if RGB isn’t disabled at boot.
+- PIO/DMA: `encoders.pio` → DMA into `enc_val[]`; `ws2812.pio` at 800 kHz for LED output. Headers autogen in `build/src/` as `encoders.pio.h`, `ws2812.pio.h`.
 
-Boot-time behavior (read GPIO via internal pull‑ups)
+## Boot-time behavior (GPIO pull-ups; pressed = low)
 
-- Hold `SW_GPIO[0]` to start in NKRO keyboard/mouse mode; otherwise default to joystick gamepad.
-- Hold `SW_GPIO[1]` to select Turbocharger LEDs; otherwise default effect is Color Cycle.
-- Hold `SW_GPIO[8]` to disable RGB (prevents launching core 1).
-  Pins live in `src/controller_config.h` (e.g., `SW_GPIO[] = {2,4,6,8,10,12,14,16,19,21}`); update there only, and keep sizes consistent with `*_SIZE` defines.
+- Hold `SW_GPIO[0]` → NKRO keyboard/mouse; default is joystick.
+- Hold `SW_GPIO[1]` → start with Turbocharger effect; default is Color Cycle.
+- Hold `SW_GPIO[8]` → disable RGB (don’t launch core 1).
+  Pins and sizes are defined in `src/controller_config.h` (keep arrays aligned to `*_SIZE`).
 
-HID and data flow
+## HID and runtime config
 
-- Report IDs in `src/usb_descriptors.h`: 1=Joystick, 2=Lights, 3=NKRO, 4=Mouse, 5=Config (vendor Feature report). Descriptor sizes depend on `SW_GPIO_SIZE`, `LED_GPIO_SIZE`, `WS2812B_LED_ZONES`.
-- Lights: OUT reports populate `lights_report.raw[...]`; if no HID lights for `REACTIVE_TIMEOUT_MAX` (1s), fall back to button‑reactive LEDs in `update_lights()`.
-- Encoder to joystick: modulo wrap with `ENC_PULSE` (PPR×4), scaled to 0–255.
-- Config Feature report (Report ID 5): 8-byte payload `[cmd, arg0..arg6]`. Commands: `0x01=SET_EFFECT (arg0=effect_id)`. GET_FEATURE returns `[status=0x00, current_effect, 0..]`.
+- Report IDs (`src/usb_descriptors.h`): 1=Joystick, 2=Lights, 3=NKRO, 4=Mouse, 5=Config (Feature report). Descriptor lengths depend on `SW_GPIO_SIZE`, `LED_GPIO_SIZE`, `WS2812B_LED_ZONES`.
+- Lights: OUT reports fill `lights_report`; if idle for `REACTIVE_TIMEOUT_MAX` (1s), `update_lights()` reverts to button-reactive LEDs.
+- Encoders → joystick: value wraps by PPR×4, scaled to 0–255.
+- Config Feature report (RID 5), 8-byte `[cmd, arg0..arg6]`:
+  - GET basic (0x00): `[status, effect_id, brightness, …]`
+  - GET extended (0x20): `[status, enc_ppr(lo,hi), mouse_sens, enc_debounce, ws_led_size(lo,hi), ws_led_zones]`
+  - SETs: `0x01=EFFECT`, `0x02=BRIGHTNESS`, `0x10=ENC_PPR`, `0x11=MOUSE_SENS`, `0x12=ENC_DEBOUNCE`, `0x13=WS_PARAMS(size,zones)`, `0x03=REBOOT_TO_BOOTSEL`.
+- Persistent settings (`load_settings()/save_settings()`): stored in last flash sector via `settings_t` (effect, brightness, enc/mouse params, WS2812B params). Some apply immediately; others (debounce, WS zones) take effect after reboot.
+- Runtime variables: `g_enc_ppr/g_enc_pulse`, `g_mouse_sens`, `g_enc_debounce`, `g_brightness`, `g_ws_led_size_cfg/g_ws_led_zones_cfg`. `show()` caps output count to `g_ws_led_size_cfg` (≤ compiled `WS2812B_LED_SIZE`).
 
-Project conventions (important when adding features)
+## Project conventions
 
-- Debounce modes live in `src/debounce/`. Add a `uint16_t my_algo()` and include it in `debounce_include.h`; select via `debounce_mode = &my_algo;` in `init()`.
-- RGB effects live in `src/rgb/`. Add `void my_effect(uint32_t counter, bool hid_mode)`; include in `rgb_include.h`; select via `ws2812b_mode = &my_effect;` or map it in `set_effect_by_id()` in `src/pico_game_controller.c`. Write colors into the global `leds[]`; frame is emitted by `show()`.
-- Switches use pull‑ups; pressed means `!gpio_get(SW_GPIO[i])`.
+- Debounce algos: add `uint16_t my_algo()` in `src/debounce/`, include in `debounce_include.h`, select with `debounce_mode = &my_algo;` in `init()`.
+- RGB effects: add `void my_effect(uint32_t counter, bool hid_mode)` in `src/rgb/`, include in `rgb_include.h`, map in `set_effect_by_id()`; write colors to global `leds[]`, then `show()` flushes.
+- Single-writer globals across cores: core 1 is the only renderer; core 0 updates mode/state and publishes `g_buttons`/`hid_rgb`.
+- Switches use pull-ups: pressed is `!gpio_get(SW_GPIO[i])`.
 
-Build, flash, debug (Windows/VS Code Pico extension)
+## Build, flash, debug (Windows)
 
-- Tasks: “Compile Project” (ninja build to `build/`), “Run Project” (picotool load), “Flash” (OpenOCD probe), plus rescue/reset tasks.
-- Artifacts: UF2 at `build/src/Pico_Game_Controller.uf2` and auto‑copied to `build_uf2/Pico_Game_Controller.uf2`.
-- PowerShell helper: `.lash.ps1 [-SkipBuild] [-Timeout <sec>]` builds (ninja), reboots to BOOTSEL (picotool), detects the `RPI-RP2` drive, and copies the UF2.
+- VS Code tasks: “Compile Project” (ninja → `build/`), “Run Project” (picotool RAM load), “Flash” (OpenOCD SWD). Rescue/reset tasks available.
+- Artifacts: UF2 at `build/src/Pico_Game_Controller.uf2`, also copied to `build_uf2/Pico_Game_Controller.uf2`.
+- PowerShell helper: `./flash.ps1 [-SkipBuild] [-Timeout <sec>]` builds, reboots to BOOTSEL, copies UF2 to `RPI-RP2`.
+- Config GUI: `tools/effect_selector.py` (needs `hidapi`). Use `run_config_tool.ps1` to launch.
 
-Files to know
+## Files you’ll touch most
 
-- `src/pico_game_controller.c`: main loop, boot‑time mode selection, encoders DMA IRQ, lights fallback, core‑1 launcher.
-- `src/controller_config.h`: single source of truth for sizes, pins, and constants (SW/LED/ENC/RGB).
-- `src/usb_descriptors.h`: HID report layouts parameterized by config sizes.
-- `src/rgb/*`: `ws2812b_util.c` (palette/color helpers), `color_cycle.c`, `turbocharger.c`, `trail.c` effects.
-- `src/debounce/*`: `eager.c` (press‑immediate, hold for N µs), `deferred.c` (stable‑for‑N µs).
+- `src/pico_game_controller.c`: main loop, HID callbacks, DMA IRQ, settings, boot-time logic, effect selection.
+- `src/controller_config.h`: pin maps and sizes; keep lengths in sync with `*_SIZE` and descriptors.
+- `src/usb_descriptors.h`: HID report layouts; sizes depend on config constants.
+- `src/rgb/*`: effects; `ws2812b_util.c` has palette/color helpers.
+- `src/debounce/*`: eager/deferred examples.
 
-Gotchas and edge cases
+## Gotchas
 
-- Keep arrays aligned to `*_SIZE` defines; descriptors and loops assume exact lengths.
-- Single‑writer globals cross cores; follow existing patterns to avoid races (e.g., only core 1 renders, core 0 updates mode/state).
-- If encoder direction is wrong, flip `ENC_REV[]` in `controller_config.h`.
-
-Ask before changing
-
-- USB descriptor structure/IDs, boot‑time button semantics, or task configuration—these impact compatibility (EAC/Konami spoofing and VS Code Pico tooling).
+- Do not change USB descriptor structure/IDs or boot semantics lightly (affects EAC/Konami spoofing and host compatibility).
+- Keep arrays and loops aligned to `*_SIZE`; mismatches cause descriptor/runtime bugs.
+- PIO headers are generated in `build/src/`; include them as `encoders.pio.h` / `ws2812.pio.h`.
