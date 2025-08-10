@@ -46,11 +46,17 @@ typedef struct
 typedef struct __attribute__((packed))
 {
   uint32_t magic;      // 'CFG1'
-  uint8_t version;     // 1
+  uint8_t version;     // 2
   uint8_t effect_id;   // 0..N
   uint8_t brightness;  // 0..255
   uint8_t reserved;    // padding
-  uint32_t reserved2;  // future
+  // v2 fields
+  uint16_t enc_ppr;        // encoder PPR (x4 steps used)
+  uint8_t mouse_sens;      // mouse sensitivity multiplier
+  uint8_t enc_debounce;    // 0/1 (applied on next init)
+  uint16_t ws_led_size;    // total WS2812B LEDs (applied on reboot)
+  uint8_t ws_led_zones;    // zones (applied on reboot)
+  uint8_t reserved2_u8;    // padding to keep 4-byte alignment intention
 } settings_t;
 
 static const uint32_t SETTINGS_MAGIC = 0x31474643u; // 'CFG1' LE
@@ -73,12 +79,23 @@ bool kbm_report;
 
 uint64_t reactive_timeout_timestamp;
 
+// Runtime-configurable settings (published via Feature report)
+static uint16_t g_enc_ppr = ENC_PPR; // default from compile-time
+static uint32_t g_enc_pulse = (uint32_t)ENC_PPR * 4u;
+static uint8_t g_mouse_sens = MOUSE_SENS;
+static uint8_t g_enc_debounce = ENC_DEBOUNCE ? 1 : 0; // takes effect on next init
+// Stored-only (cannot be safely applied at runtime without descriptor changes)
+static uint16_t g_ws_led_size_cfg = WS2812B_LED_SIZE;  // persisted for next firmware build/reboot
+static uint8_t g_ws_led_zones_cfg = WS2812B_LED_ZONES; // persisted for next firmware build/reboot
+
 void (*ws2812b_mode)(uint32_t counter, bool hid_mode);
 void (*loop_mode)();
 uint16_t (*debounce_mode)();
 bool joy_mode_check = true;
 // Deferred actions from USB callbacks
 static volatile bool g_request_bootsel = false;
+// For GET_FEATURE multiplexing of payloads
+static volatile uint8_t g_config_query_mode = 0; // 0=basic, 0x20=extended settings
 
 // RGB effect selection
 enum
@@ -167,13 +184,34 @@ static void load_settings(void)
 {
   const uint8_t *flash_ptr = (const uint8_t *)(XIP_BASE + SETTINGS_FLASH_OFFSET);
   const settings_t *s = (const settings_t *)flash_ptr;
-  if (s->magic == SETTINGS_MAGIC && s->version == 1)
+  if (s->magic == SETTINGS_MAGIC && (s->version == 1 || s->version == 2))
   {
     if (s->effect_id <= EFFECT_RADAR_SWEEP)
     {
       current_effect_id = s->effect_id;
     }
     g_brightness = s->brightness;
+    if (s->version >= 2)
+    {
+      if (s->enc_ppr >= 1 && s->enc_ppr <= 4000)
+      {
+        g_enc_ppr = s->enc_ppr;
+      }
+      g_enc_pulse = (uint32_t)g_enc_ppr * 4u;
+      if (s->mouse_sens >= 1 && s->mouse_sens <= 50)
+      {
+        g_mouse_sens = s->mouse_sens;
+      }
+      g_enc_debounce = s->enc_debounce ? 1 : 0;
+      if (s->ws_led_size >= 1 && s->ws_led_size <= 300)
+      {
+        g_ws_led_size_cfg = s->ws_led_size;
+      }
+      if (s->ws_led_zones >= 1 && s->ws_led_zones <= 16)
+      {
+        g_ws_led_zones_cfg = s->ws_led_zones;
+      }
+    }
   }
 }
 
@@ -181,11 +219,16 @@ static void save_settings(void)
 {
   settings_t s = {
       .magic = SETTINGS_MAGIC,
-      .version = 1,
+      .version = 2,
       .effect_id = current_effect_id,
       .brightness = g_brightness,
       .reserved = 0,
-      .reserved2 = 0,
+      .enc_ppr = g_enc_ppr,
+      .mouse_sens = g_mouse_sens,
+      .enc_debounce = g_enc_debounce,
+      .ws_led_size = g_ws_led_size_cfg,
+      .ws_led_zones = g_ws_led_zones_cfg,
+      .reserved2_u8 = 0,
   };
 
   // Prepare a page buffer (0xFF filled)
@@ -222,7 +265,10 @@ union
  **/
 void show()
 {
-  for (int i = 0; i < WS2812B_LED_SIZE; i++)
+  int n = (int)g_ws_led_size_cfg;
+  if (n <= 0 || n > WS2812B_LED_SIZE)
+    n = WS2812B_LED_SIZE;
+  for (int i = 0; i < n; i++)
   {
     // Apply global brightness scaling at output time
     uint8_t r = (uint16_t)leds[i].r * g_brightness / 255;
@@ -290,13 +336,16 @@ void joy_mode()
       cur_enc_val[i] +=
           ((ENC_REV[i] ? 1 : -1) * (enc_val[i] - prev_enc_val[i]));
       while (cur_enc_val[i] < 0)
-        cur_enc_val[i] = ENC_PULSE + cur_enc_val[i];
-      cur_enc_val[i] %= ENC_PULSE;
+        cur_enc_val[i] = (int)g_enc_pulse + cur_enc_val[i];
+      if (g_enc_pulse)
+      {
+        cur_enc_val[i] %= (int)g_enc_pulse;
+      }
 
       prev_enc_val[i] = enc_val[i];
     }
 
-    report.joy0 = ((double)cur_enc_val[0] / ENC_PULSE) * (UINT8_MAX + 1);
+    report.joy0 = g_enc_pulse ? (((double)cur_enc_val[0] / g_enc_pulse) * (UINT8_MAX + 1)) : 0;
     report.joy1 = 127;
 
     tud_hid_n_report(0x00, REPORT_ID_JOYSTICK, &report, sizeof(report));
@@ -344,7 +393,7 @@ void key_mode()
         delta[i] = (enc_val[i] - prev_enc_val[i]) * (ENC_REV[i] ? 1 : -1);
         prev_enc_val[i] = enc_val[i];
       }
-      tud_hid_mouse_report(REPORT_ID_MOUSE, 0x00, delta[0] * MOUSE_SENS, 0, 0,
+      tud_hid_mouse_report(REPORT_ID_MOUSE, 0x00, delta[0] * g_mouse_sens, 0, 0,
                            0);
     }
     // Alternate reports
@@ -407,6 +456,9 @@ void core1_entry()
  **/
 void init()
 {
+  // Load persisted settings early for init-time parameters (e.g., encoder debounce)
+  load_settings();
+
   // LED Pin on when connected
   gpio_init(25);
   gpio_set_dir(25, GPIO_OUT);
@@ -420,7 +472,7 @@ void init()
   for (int i = 0; i < ENC_GPIO_SIZE; i++)
   {
     enc_val[i], prev_enc_val[i], cur_enc_val[i] = 0;
-    encoders_program_init(pio, i, offset, ENC_GPIO[i], ENC_DEBOUNCE);
+    encoders_program_init(pio, i, offset, ENC_GPIO[i], g_enc_debounce != 0);
 
     dma_channel_config c = dma_channel_get_default_config(i);
     channel_config_set_read_increment(&c, false);
@@ -480,7 +532,6 @@ void init()
   }
 
   // Load persisted settings (effect + brightness), allow boot override for Turbocharger
-  load_settings();
   set_effect_by_id(current_effect_id);
 
   // Debouncing Mode
@@ -540,13 +591,31 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
 
   if (report_id == REPORT_ID_CONFIG && report_type == HID_REPORT_TYPE_FEATURE)
   {
-    // Return 8-byte config payload: [cmd=0x00 status, effect_id, ...]
-    buffer[0] = 0x00; // status OK
-    buffer[1] = current_effect_id;
-    buffer[2] = g_brightness;
-    for (int i = 3; i < 8; ++i)
-      buffer[i] = 0;
-    return 8;
+    // Multiplex basic vs extended payload based on last query mode
+    if (g_config_query_mode == 0x20)
+    {
+      // Extended: [status, enc_ppr_lo, enc_ppr_hi, mouse_sens, enc_debounce, ws_size_lo, ws_size_hi, ws_zones]
+      buffer[0] = 0x00;
+      buffer[1] = (uint8_t)(g_enc_ppr & 0xFF);
+      buffer[2] = (uint8_t)((g_enc_ppr >> 8) & 0xFF);
+      buffer[3] = g_mouse_sens;
+      buffer[4] = g_enc_debounce ? 1 : 0;
+      buffer[5] = (uint8_t)(g_ws_led_size_cfg & 0xFF);
+      buffer[6] = (uint8_t)((g_ws_led_size_cfg >> 8) & 0xFF);
+      buffer[7] = g_ws_led_zones_cfg;
+      g_config_query_mode = 0; // reset after read
+      return 8;
+    }
+    else
+    {
+      // Basic: [status, effect_id, brightness, ...]
+      buffer[0] = 0x00; // status OK
+      buffer[1] = current_effect_id;
+      buffer[2] = g_brightness;
+      for (int i = 3; i < 8; ++i)
+        buffer[i] = 0;
+      return 8;
+    }
   }
 
   return 0;
@@ -595,6 +664,52 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
         g_brightness = buffer[1]; // 0..255
         save_settings();
       }
+      break;
+    case 0x10: // SET_ENCODER_PPR (arg0..1 = uint16 le)
+      if (bufsize >= 3)
+      {
+        uint16_t ppr = (uint16_t)(buffer[1] | ((uint16_t)buffer[2] << 8));
+        if (ppr >= 1 && ppr <= 4000)
+        {
+          g_enc_ppr = ppr;
+          g_enc_pulse = (uint32_t)g_enc_ppr * 4u;
+          save_settings();
+        }
+      }
+      break;
+    case 0x11: // SET_MOUSE_SENS (arg0 = 1..50)
+      if (bufsize >= 2)
+      {
+        uint8_t sens = buffer[1];
+        if (sens < 1)
+          sens = 1;
+        if (sens > 50)
+          sens = 50;
+        g_mouse_sens = sens;
+        save_settings();
+      }
+      break;
+    case 0x12: // SET_ENC_DEBOUNCE (arg0 = 0/1) — applied on next init
+      if (bufsize >= 2)
+      {
+        g_enc_debounce = buffer[1] ? 1 : 0;
+        save_settings();
+      }
+      break;
+    case 0x13: // SET_WS_PARAMS (arg0..1=size le, arg2=zones) — applied on reboot
+      if (bufsize >= 4)
+      {
+        uint16_t sz = (uint16_t)(buffer[1] | ((uint16_t)buffer[2] << 8));
+        uint8_t zn = buffer[3];
+        if (sz >= 1 && sz <= 300)
+          g_ws_led_size_cfg = sz;
+        if (zn >= 1 && zn <= 16)
+          g_ws_led_zones_cfg = zn;
+        save_settings();
+      }
+      break;
+    case 0x20: // GET_EXT_STATUS (prepare extended payload for next GET_FEATURE)
+      g_config_query_mode = 0x20;
       break;
     case 0x03: // REBOOT_TO_BOOTSEL
       // Defer actual reboot to main loop to avoid disrupting control transfer

@@ -46,6 +46,11 @@ REPORT_ID_CONFIG = 5
 CMD_SET_EFFECT = 0x01
 CMD_SET_BRIGHTNESS = 0x02
 CMD_REBOOT_BOOTSEL = 0x03
+CMD_SET_ENCODER_PPR = 0x10
+CMD_SET_MOUSE_SENS = 0x11
+CMD_SET_ENC_DEBOUNCE = 0x12
+CMD_SET_WS_PARAMS = 0x13
+CMD_GET_EXT_STATUS = 0x20
 
 EFFECTS = [
     (0, "Color Cycle"),
@@ -67,7 +72,7 @@ EFFECTS = [
 def hid_enumerate_info():
     """Return a human-readable list of HID interfaces for our VID/PID."""
     if hid is None:
-        return "hidapi no disponible"
+        return "hidapi not available"
     lines = []
     try:
         for d in hid.enumerate(VID, PID):
@@ -83,7 +88,7 @@ def hid_enumerate_info():
     except HIDErrors as e:
         lines.append(f"enumerate error: {e}")
     if not lines:
-        lines.append("No se encontraron interfaces HID para este VID/PID")
+        lines.append("No HID interfaces found for this VID/PID")
     return "\n\n".join(lines)
 
 
@@ -135,6 +140,33 @@ def get_status(dev):
     return None, None
 
 
+def get_ext_status(dev):
+    """Return a dict with encoder/LED settings from extended status."""
+    try:
+        payload = bytes([REPORT_ID_CONFIG, CMD_GET_EXT_STATUS] + [0] * 7)
+        log("send_feature_report GET_EXT_STATUS:", list(payload))
+        dev.send_feature_report(payload)
+        data = dev.get_feature_report(REPORT_ID_CONFIG, 9)
+        log("ext status ->", list(data) if data else None)
+        if data and len(data) >= 9:
+            # [id, status, ppr_lo, ppr_hi, mouse_sens, enc_debounce, sz_lo, sz_hi, zones]
+            ppr = data[2] | (data[3] << 8)
+            mouse = data[4]
+            enc_db = 1 if data[5] else 0
+            sz = data[6] | (data[7] << 8)
+            zones = data[8]
+            return {
+                "enc_ppr": ppr,
+                "mouse_sens": mouse,
+                "enc_debounce": enc_db,
+                "ws_led_size": sz,
+                "ws_led_zones": zones,
+            }
+    except HIDErrors as e:
+        log("get_ext_status error:", e)
+    return {}
+
+
 def set_effect(dev, effect_id: int):
     payload = [REPORT_ID_CONFIG, CMD_SET_EFFECT,
                int(effect_id) & 0xFF] + [0] * 6
@@ -159,8 +191,8 @@ def reboot_to_bootsel(dev):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Pico IIDX Effect Selector")
-        self.geometry("400x210")
+        self.title("Pico IIDX Config Tool")
+        self.geometry("520x360")
         self.dev = None
 
         frm = ttk.Frame(self, padding=10)
@@ -194,27 +226,68 @@ class App(tk.Tk):
         self.brightness_scale.grid(
             row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0))
 
-        self.btn_refresh = ttk.Button(
-            frm, text="Refresh", command=self.refresh)
-        self.btn_refresh.grid(row=2, column=0, pady=(12, 0), sticky="w")
-        self.btn_apply = ttk.Button(frm, text="Apply", command=self.apply)
-        self.btn_apply.grid(row=2, column=1, pady=(12, 0), sticky="e")
+    # Encoder/Mouse settings frame
+        encfrm = ttk.LabelFrame(frm, text="Encoder & Mouse", padding=8)
+        encfrm.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        encfrm.columnconfigure(1, weight=1)
+        ttk.Label(encfrm, text="Encoder PPR:").grid(
+            row=0, column=0, sticky="w")
+        self.ppr_var = tk.IntVar(value=600)
+        self.ppr_entry = ttk.Entry(encfrm, textvariable=self.ppr_var, width=8)
+        self.ppr_entry.grid(row=0, column=1, sticky="w")
+        ttk.Label(encfrm, text="Mouse Sens:").grid(
+            row=0, column=2, sticky="e", padx=(12, 0))
+        self.mouse_var = tk.IntVar(value=1)
+        self.mouse_entry = ttk.Entry(
+            encfrm, textvariable=self.mouse_var, width=6)
+        self.mouse_entry.grid(row=0, column=3, sticky="w")
+        self.db_var = tk.IntVar(value=0)
+        self.db_check = ttk.Checkbutton(
+            encfrm, text="Encoder Debounce (on reboot)", variable=self.db_var)
+        self.db_check.grid(row=1, column=0, columnspan=2,
+                           sticky="w", pady=(6, 0))
 
-        # Reboot to BOOTSEL button
-        self.btn_bootsel = ttk.Button(
-            frm, text="Reboot to BOOTSEL", command=self.on_bootsel
-        )
-        self.btn_bootsel.grid(row=2, column=2, pady=(12, 0), sticky="e")
+        # WS2812B stored params
 
-        # Debug button
-        self.btn_debug = ttk.Button(
-            frm, text="Debug HID", command=self.on_debug)
-        self.btn_debug.grid(row=3, column=0, pady=(8, 0), sticky="w")
+        ledfrm = ttk.LabelFrame(
+            frm, text="WS2812B (applied on reboot)", padding=8)
+        ledfrm.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        ttk.Label(ledfrm, text="LED Count:").grid(row=0, column=0, sticky="w")
+        self.led_count_var = tk.IntVar(value=10)
+        self.led_count_entry = ttk.Entry(
+            ledfrm, textvariable=self.led_count_var, width=8)
+        self.led_count_entry.grid(row=0, column=1, sticky="w")
+        ttk.Label(ledfrm, text="Zones:").grid(
+            row=0, column=2, sticky="e", padx=(12, 0))
+        self.zones_var = tk.IntVar(value=2)
+        self.zones_entry = ttk.Entry(
+            ledfrm, textvariable=self.zones_var, width=6)
+        self.zones_entry.grid(row=0, column=3, sticky="w")
 
+        # Debug button inside LED frame
+        # Status (above bottom buttons)
         self.status_var = tk.StringVar(value="Not connected")
         ttk.Label(frm, textvariable=self.status_var).grid(
             row=4, column=0, columnspan=3, sticky="w", pady=(12, 0)
         )
+
+        # Bottom buttons row (at the end)
+        btnfrm = ttk.Frame(frm, padding=(0, 0, 0, 0))
+        btnfrm.grid(row=5, column=0, columnspan=3, sticky="ew")
+        btnfrm.columnconfigure(1, weight=1)
+        self.btn_refresh = ttk.Button(
+            btnfrm, text="Refresh", command=self.refresh)
+        self.btn_refresh.grid(row=0, column=0, sticky="w", pady=(4, 0))
+        self.btn_apply = ttk.Button(btnfrm, text="Apply", command=self.apply)
+        self.btn_apply.grid(row=0, column=1, sticky="e", pady=(4, 0))
+        self.btn_bootsel = ttk.Button(
+            btnfrm, text="Reboot to BOOTSEL", command=self.on_bootsel)
+        self.btn_bootsel.grid(row=0, column=2, sticky="e",
+                              pady=(4, 0), padx=(8, 0))
+        self.btn_debug = ttk.Button(
+            btnfrm, text="Debug HID", command=self.on_debug)
+        self.btn_debug.grid(row=0, column=3, sticky="e",
+                            pady=(4, 0), padx=(8, 0))
 
         self.after(200, self.auto_connect)
 
@@ -244,6 +317,15 @@ class App(tk.Tk):
         if bri is not None:
             self.brightness_scale.set(bri)
             self.brightness_val_label.configure(text=str(int(bri)))
+        # Extended settings
+        ext = get_ext_status(self.dev)
+        if ext:
+            self.ppr_var.set(ext.get("enc_ppr", self.ppr_var.get()))
+            self.mouse_var.set(ext.get("mouse_sens", self.mouse_var.get()))
+            self.db_var.set(1 if ext.get("enc_debounce") else 0)
+            self.led_count_var.set(
+                ext.get("ws_led_size", self.led_count_var.get()))
+            self.zones_var.set(ext.get("ws_led_zones", self.zones_var.get()))
 
     def apply(self):
         if not self.dev:
@@ -254,8 +336,24 @@ class App(tk.Tk):
             set_effect(self.dev, idx)
             bri = int(float(self.brightness_scale.get()))
             set_brightness(self.dev, bri)
+            # Apply encoder/mouse immediate settings
+            ppr = max(1, min(4000, int(self.ppr_var.get())))
+            devh = self.dev
+            devh.send_feature_report(bytes(
+                [REPORT_ID_CONFIG, CMD_SET_ENCODER_PPR, ppr & 0xFF, (ppr >> 8) & 0xFF, 0, 0, 0, 0, 0]))
+            ms = max(1, min(50, int(self.mouse_var.get())))
+            devh.send_feature_report(
+                bytes([REPORT_ID_CONFIG, CMD_SET_MOUSE_SENS, ms, 0, 0, 0, 0, 0, 0]))
+            # Persist debounce and WS params (take effect after reboot)
+            db = 1 if self.db_var.get() else 0
+            devh.send_feature_report(
+                bytes([REPORT_ID_CONFIG, CMD_SET_ENC_DEBOUNCE, db, 0, 0, 0, 0, 0, 0]))
+            count = max(1, min(300, int(self.led_count_var.get())))
+            zones = max(1, min(16, int(self.zones_var.get())))
+            devh.send_feature_report(bytes(
+                [REPORT_ID_CONFIG, CMD_SET_WS_PARAMS, count & 0xFF, (count >> 8) & 0xFF, zones, 0, 0, 0, 0]))
             self.status_var.set(
-                f"Applied: {EFFECTS[idx][1]}, Brightness {bri}")
+                f"Applied: {EFFECTS[idx][1]}, Brightness {bri} (PPR {ppr}, Sens {ms})")
         except HIDErrors as e:
             log("apply error:", e)
             messagebox.showerror("Error", str(e))
@@ -286,8 +384,8 @@ if __name__ == "__main__":
     # Headless CLI: send reboot-to-bootloader if requested
     if "--reboot-bootsel" in sys.argv:
         try:
-            dev = open_device()
-            reboot_to_bootsel(dev)
+            device = open_device()
+            reboot_to_bootsel(device)
             print("OK: reboot command sent")
             sys.exit(0)
         except HIDErrors as e:
