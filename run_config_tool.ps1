@@ -11,8 +11,22 @@ $ActivatePs = Join-Path $VenvPath 'Scripts/Activate.ps1'
 $PyExe      = Join-Path $VenvPath 'Scripts/python.exe'
 $ReqFile    = Join-Path $RepoRoot 'tools/requirements.txt'
 $AppFile    = Join-Path $RepoRoot 'tools/effect_selector.py'
+${ExeOneFile} = Join-Path $RepoRoot 'dist/PicoGameConfig.exe'
+${ExeOneDir}  = Join-Path $RepoRoot 'dist/PicoGameConfig/PicoGameConfig.exe'
 
 Write-Host "Repo: $RepoRoot"
+
+# If a compilado EXE exists, run it directly
+if (Test-Path ${ExeOneFile}) {
+    Write-Host "Ejecutando binario empaquetado: ${ExeOneFile}"
+    & ${ExeOneFile}
+    return
+}
+elseif (Test-Path ${ExeOneDir}) {
+    Write-Host "Ejecutando binario empaquetado: ${ExeOneDir}"
+    & ${ExeOneDir}
+    return
+}
 
 # Pick Python launcher (python or py -3)
 $PythonLauncher = $null

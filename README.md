@@ -68,6 +68,17 @@ Troubleshooting:
 - If it shows “Not connected”, check the device is enumerated (use “Debug HID”).
 - If RGB zones/size don’t appear to change instantly, reboot the device—those are applied on startup.
 
+## HID Config Tool (compiled EXE)
+
+You can build a standalone Windows executable using PyInstaller.
+
+- Build with:
+  - PowerShell: `./tools/build_config_tool.ps1`
+  - Output: `dist/PicoGameConfig.exe` (single file). The launcher `run_config_tool.ps1` will prefer this EXE if present.
+- First run will create a local `.venv` and install `hidapi` and `pyinstaller` automatically.
+
+Note: The compiled EXE uses the same VID/PID and HID feature reports as the Python script; no functional differences.
+
 ## Firmware architecture overview
 
 - Core 0: USB HID + input scanning + mode/LED logic. See `src/pico_game_controller.c`.

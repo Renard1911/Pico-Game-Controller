@@ -1,3 +1,2 @@
-build/
-build/
-build_uf2
+build
+build_pyinstaller
