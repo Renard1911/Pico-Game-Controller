@@ -10,7 +10,7 @@
 #define SW_DEBOUNCE_TIME_US 8000     // Switch debounce delay in us
 #define ENC_PULSE (ENC_PPR * 4)      // 4 pulses per PPR
 #define REACTIVE_TIMEOUT_MAX 1000000 // HID to reactive timeout in us
-#define WS2812B_LED_SIZE 10          // Number of WS2812B LEDs (persisted value can be saved; applied on reboot)
+#define WS2812B_LED_SIZE 40          // Number of WS2812B LEDs (persisted value can be saved; applied on reboot)
 #define WS2812B_LED_ZONES 2          // Number of WS2812B LED Zones (persisted value can be saved; applied on reboot)
 #define WS2812B_LEDS_PER_ZONE \
   WS2812B_LED_SIZE / WS2812B_LED_ZONES // Number of LEDs per zone
