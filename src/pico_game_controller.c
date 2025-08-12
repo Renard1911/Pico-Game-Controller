@@ -85,8 +85,7 @@ static uint32_t g_enc_pulse = (uint32_t)ENC_PPR * 4u;
 static uint8_t g_mouse_sens = MOUSE_SENS;
 static uint8_t g_enc_debounce = ENC_DEBOUNCE ? 1 : 0; // takes effect on next init
 // Stored-only (cannot be safely applied at runtime without descriptor changes)
-static uint16_t g_ws_led_size_cfg = WS2812B_LED_SIZE;  // persisted for next firmware build/reboot
-static uint8_t g_ws_led_zones_cfg = WS2812B_LED_ZONES; // persisted for next firmware build/reboot
+// WS2812B size/zones are now compile-time only; no persistent override
 
 void (*ws2812b_mode)(uint32_t counter, bool hid_mode);
 void (*loop_mode)();
@@ -202,15 +201,7 @@ static void load_settings(void)
       {
         g_mouse_sens = s->mouse_sens;
       }
-      g_enc_debounce = s->enc_debounce ? 1 : 0;
-      if (s->ws_led_size >= 1 && s->ws_led_size <= 300)
-      {
-        g_ws_led_size_cfg = s->ws_led_size;
-      }
-      if (s->ws_led_zones >= 1 && s->ws_led_zones <= 16)
-      {
-        g_ws_led_zones_cfg = s->ws_led_zones;
-      }
+      g_enc_debounce = s->enc_debounce ? 1 : 0; // Size/zones fields ignored (compile-time only now)
     }
   }
 }
@@ -226,8 +217,9 @@ static void save_settings(void)
       .enc_ppr = g_enc_ppr,
       .mouse_sens = g_mouse_sens,
       .enc_debounce = g_enc_debounce,
-      .ws_led_size = g_ws_led_size_cfg,
-      .ws_led_zones = g_ws_led_zones_cfg,
+      // Persist compile-time constants for backward compatibility; values are ignored on load
+      .ws_led_size = WS2812B_LED_SIZE,
+      .ws_led_zones = WS2812B_LED_ZONES,
       .reserved2_u8 = 0,
   };
 
@@ -265,9 +257,7 @@ union
  **/
 void show()
 {
-  int n = (int)g_ws_led_size_cfg;
-  if (n <= 0 || n > WS2812B_LED_SIZE)
-    n = WS2812B_LED_SIZE;
+  int n = WS2812B_LED_SIZE; // Always use compile-time size now
   for (int i = 0; i < n; i++)
   {
     // Apply global brightness scaling at output time
@@ -600,9 +590,9 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id,
       buffer[2] = (uint8_t)((g_enc_ppr >> 8) & 0xFF);
       buffer[3] = g_mouse_sens;
       buffer[4] = g_enc_debounce ? 1 : 0;
-      buffer[5] = (uint8_t)(g_ws_led_size_cfg & 0xFF);
-      buffer[6] = (uint8_t)((g_ws_led_size_cfg >> 8) & 0xFF);
-      buffer[7] = g_ws_led_zones_cfg;
+  buffer[5] = (uint8_t)(WS2812B_LED_SIZE & 0xFF);
+  buffer[6] = (uint8_t)((WS2812B_LED_SIZE >> 8) & 0xFF);
+  buffer[7] = WS2812B_LED_ZONES;
       g_config_query_mode = 0; // reset after read
       return 8;
     }
@@ -696,18 +686,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id,
         save_settings();
       }
       break;
-    case 0x13: // SET_WS_PARAMS (arg0..1=size le, arg2=zones) — applied on reboot
-      if (bufsize >= 4)
-      {
-        uint16_t sz = (uint16_t)(buffer[1] | ((uint16_t)buffer[2] << 8));
-        uint8_t zn = buffer[3];
-        if (sz >= 1 && sz <= 300)
-          g_ws_led_size_cfg = sz;
-        if (zn >= 1 && zn <= 16)
-          g_ws_led_zones_cfg = zn;
-        save_settings();
-      }
-      break;
+    case 0x13: // SET_WS_PARAMS deprecated: size/zones no longer configurable; ignore
+      break; // No-op
     case 0x20: // GET_EXT_STATUS (prepare extended payload for next GET_FEATURE)
       g_config_query_mode = 0x20;
       break;
